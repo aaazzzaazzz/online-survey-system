@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>填写问卷 · 问卷系统</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="card page-head">
+    <h1 id="survey-title">问卷</h1>
+    <p id="survey-desc"></p>
+    <p id="survey-note" class="hint"></p>
+    <p id="progress" class="hint"></p>
+  </div>
+
+  <form id="fill-form" class="card">
+    <div id="question-box"></div>
+    <div class="fill-nav">
+      <button type="button" id="prev-btn" class="secondary">上一题</button>
+      <div class="btn-group">
+        <button type="button" id="next-btn">下一题</button>
+        <button type="button" id="submit-btn">提交答卷</button>
+      </div>
+    </div>
+  </form>
+
+  <p id="message"></p>
+
+  <script src="/api.js"></script>
+  <script>
+    const surveyId = location.pathname.split('/').filter(Boolean).pop();
+    const message = document.getElementById('message');
+    let survey = null;
+    const answered = [];          // 已答题 id（路径顺序）
+    const answersMap = new Map(); // questionId -> value；回退后的旧值保留在 map 中，但提交时只取路径上的题
+
+    function escapeHtml(text) {
+      return String(text).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
+    function findQ(qid) { return survey.questions.find((q) => q.id === qid); }
+
+    // —— 客户端镜像服务端规则（仅用于交互体验；服务端提交时重新计算，不信任前端）——
+    function ruleMatches(q, rule, value) {
+      const c = (rule.conditions || [])[0];
+      if (!c) return false;
+      if (q.type === 'single') return value === c.optionId;
+      if (q.type === 'multi') {
+        const mode = rule.matchMode === 'all' ? 'all' : 'any';
+        const ids = c.optionIds || [];
+        if (mode === 'any') return value.some((id) => ids.includes(id));
+        return ids.every((id) => value.includes(id));
+      }
+      if (q.type === 'number') {
+        switch (c.op) {
+          case 'eq': return value === c.value;
+          case 'ne': return value !== c.value;
+          case 'lt': return value < c.value;
+          case 'lte': return value <= c.value;
+          case 'gt': return value > c.value;
+          case 'gte': return value >= c.value;
+        }
+      }
+      return false;
+    }
+
+    function resolveTarget(q, value) {
+      for (const rule of q.jumps || []) {
+        if (ruleMatches(q, rule, value)) return rule.targetQuestionId;
+      }
+      return null;
+    }
+
+    // 下一道应显示的题：最后一个已答题命中跳转 → 目标；否则按顺序下一题；无则 null（已答完）
+    function nextQuestionId() {
+      if (!answered.length) return survey.questions.length ? survey.questions[0].id : null;
+      const last = findQ(answered[answered.length - 1]);
+      const target = resolveTarget(last, answersMap.get(last.id));
+      if (target) return target;
+      const idx = survey.questions.findIndex((q) => q.id === last.id);
+      return idx + 1 < survey.questions.length ? survey.questions[idx + 1].id : null;
+    }
+
+    function hintFor(q) {
+      if (q.type === 'multi') {
+        if (q.minSelect !== null && q.maxSelect !== null && q.minSelect === q.maxSelect) return `（请选择 ${q.minSelect} 项）`;
+        const parts = [];
+        if (q.minSelect !== null) parts.push(`至少 ${q.minSelect} 项`);
+        if (q.maxSelect !== null) parts.push(`最多 ${q.maxSelect} 项`);
+        return parts.length ? `（${parts.join('，')}）` : '';
+      }
+      if (q.type === 'text') {
+        const parts = [];
+        if (q.minLength !== null) parts.push(`至少 ${q.minLength} 字`);
+        if (q.maxLength !== null) parts.push(`最多 ${q.maxLength} 字`);
+        return parts.length ? `（${parts.join('，')}）` : '';
+      }
+      if (q.type === 'number') {
+        const parts = [];
+        if (q.minValue !== null) parts.push(`≥ ${q.minValue}`);
+        if (q.maxValue !== null) parts.push(`≤ ${q.maxValue}`);
+        if (q.integerOnly) parts.push('整数');
+        return parts.length ? `（${parts.join('，')}）` : '';
+      }
+      return '';
+    }
+
+    async function load() {
+      const r = await api('/api/fill/' + surveyId);
+      if (r.status !== 200) {
+        document.getElementById('fill-form').hidden = true;
+        message.textContent = (r.data && r.data.error) || '无法打开该问卷';
+        return;
+      }
+      survey = r.data;
+      document.getElementById('survey-title').textContent = survey.title;
+      document.getElementById('survey-desc').textContent = survey.description || '';
+      const notes = [];
+      if (survey.allowAnonymous) notes.push('本问卷为匿名问卷，不会记录您的身份。');
+      if (!survey.allowRepeat) notes.push('本问卷每人限填一次。');
+      if (survey.deadline) notes.push(`截止时间：${new Date(survey.deadline).toLocaleString()}`);
+      document.getElementById('survey-note').textContent = notes.join(' ');
+      renderCurrent();
+    }
+
+    function renderCurrent() {
+      const box = document.getElementById('question-box');
+      const currentId = answered.length ? nextQuestionId() : (survey.questions[0] ? survey.questions[0].id : null);
+      document.getElementById('prev-btn').disabled = answered.length === 0;
+      if (!currentId) {
+        box.innerHTML = '<p><strong>已答完所有应答题目，请点击"提交答卷"。</strong></p>';
+        document.getElementById('next-btn').hidden = true;
+        document.getElementById('progress').textContent = `已答 ${answered.length} 题`;
+        return;
+      }
+      document.getElementById('next-btn').hidden = false;
+      const q = findQ(currentId);
+      const idx = survey.questions.findIndex((x) => x.id === q.id);
+      document.getElementById('progress').textContent = `当前：第 ${idx + 1} / ${survey.questions.length} 题（已答 ${answered.length} 题）`;
+      const prev = answersMap.get(q.id);
+      box.innerHTML = renderQuestionHtml(q, idx, prev);
+    }
+
+    function renderQuestionHtml(q, idx, prev) {
+      let html = `<fieldset data-qid="${q.id}" data-type="${q.type}" data-required="${q.required ? '1' : ''}">`;
+      html += `<legend>${idx + 1}. ${escapeHtml(q.title)}${q.required ? '（必答）' : ''}${hintFor(q)}</legend>`;
+      if (q.type === 'single' || q.type === 'multi') {
+        const inputType = q.type === 'single' ? 'radio' : 'checkbox';
+        for (const o of q.options) {
+          const checked = q.type === 'single' ? (prev === o.id) : ((prev || []).includes(o.id));
+          html += `<label class="inline"><input type="${inputType}" name="q-${q.id}" value="${o.id}"${checked ? ' checked' : ''}> ${escapeHtml(o.label)}</label>`;
+        }
+      } else if (q.type === 'text') {
+        html += `<input type="text" name="q-${q.id}" value="${prev !== undefined ? escapeHtml(prev) : ''}">`;
+      } else if (q.type === 'number') {
+        html += `<input type="number" name="q-${q.id}" step="${q.integerOnly ? '1' : 'any'}"` +
+          (q.minValue !== null ? ` min="${q.minValue}"` : '') +
+          (q.maxValue !== null ? ` max="${q.maxValue}"` : '') +
+          ` value="${prev !== undefined ? prev : ''}">`;
+      }
+      html += '</fieldset>';
+      return html;
+    }
+
+    // 读取当前题作答；未作答返回 null
+    function collectAnswer(q, fieldset) {
+      if (q.type === 'multi') {
+        const ids = [...fieldset.querySelectorAll('input:checked')].map((el) => el.value);
+        return ids.length ? ids : null;
+      }
+      if (q.type === 'single') {
+        const checked = fieldset.querySelector('input:checked');
+        return checked ? checked.value : null;
+      }
+      const el = fieldset.querySelector('input');
+      if (!el || el.value === '') return null;
+      return q.type === 'number' ? Number(el.value) : el.value;
+    }
+
+    document.getElementById('next-btn').addEventListener('click', () => {
+      message.textContent = '';
+      const currentId = answered.length ? nextQuestionId() : survey.questions[0].id;
+      const q = findQ(currentId);
+      const fieldset = document.querySelector('#question-box fieldset');
+      const value = collectAnswer(q, fieldset);
+      fieldset.classList.remove('error');
+      if (value === null) {
+        if (q.required) { fieldset.classList.add('error'); message.textContent = '本题为必答题，请作答后再继续。'; }
+        else message.textContent = '本题可不答：如不填写，请直接点击"提交答卷"（无法跳过本题继续作答后面的题）。';
+        return;
+      }
+      answersMap.set(q.id, value);
+      answered.push(q.id);
+      renderCurrent();
+    });
+
+    document.getElementById('prev-btn').addEventListener('click', () => {
+      message.textContent = '';
+      answered.pop();
+      // 回退后，其后路径上的答案不再进入提交内容（自动清理失效路径答案）
+      renderCurrent();
+    });
+
+    document.getElementById('submit-btn').addEventListener('click', async () => {
+      message.textContent = '';
+      // 只提交当前路径上的答案；服务端会重新计算合法路径并校验
+      const answers = answered.map((qid) => ({ questionId: qid, value: answersMap.get(qid) }));
+      const r = await api('/api/fill/' + surveyId + '/submit', { method: 'POST', body: { answers } });
+      if (r.status === 201) {
+        document.getElementById('fill-form').hidden = true;
+        message.className = 'ok';
+        message.textContent = '提交成功，感谢您的填写！';
+      } else {
+        message.className = '';
+        message.textContent = (r.data && r.data.error) || '提交失败';
+      }
+    });
+
+    load();
+  </script>
+</body>
+</html>

@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>统计 · 问卷系统</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="page-head">
+    <a href="/surveys.html" class="back-link">← 返回我的问卷</a>
+    <h1 id="survey-title">统计</h1>
+  </div>
+  <div class="card stat-total">总答卷数：<strong id="total"></strong></div>
+  <div class="card" id="questions"></div>
+  <p id="message"></p>
+
+  <script src="/api.js"></script>
+  <script>
+    const id = new URLSearchParams(location.search).get('id');
+    const TYPE_TEXT = { single: '单选', multi: '多选', text: '文本', number: '数字' };
+
+    function escapeHtml(text) {
+      return String(text).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
+    async function load() {
+      const r = await api('/api/stats/' + id);
+      if (r.status !== 200) {
+        document.getElementById('message').textContent = (r.data && r.data.error) || '无法查看统计';
+        return;
+      }
+      const stats = r.data;
+      document.getElementById('survey-title').textContent = stats.title + ' · 统计';
+      document.getElementById('total').textContent = stats.totalResponses;
+      const box = document.getElementById('questions');
+      box.innerHTML = '';
+      stats.questions.forEach((q, i) => {
+        const div = document.createElement('div');
+        div.className = 'stat-question';
+        let html = `<h3>${i + 1}. ${escapeHtml(q.title)} <span class="badge badge-type">${TYPE_TEXT[q.type] || q.type}</span></h3>`;
+        if (q.type === 'single' || q.type === 'multi') {
+          html += '<div class="table-wrap"><table><thead><tr><th>选项</th><th>' + (q.type === 'single' ? '选择人数' : '选择次数') + '</th></tr></thead><tbody>';
+          for (const oc of q.optionCounts) html += `<tr><td>${escapeHtml(oc.label)}</td><td>${oc.count}</td></tr>`;
+          html += '</tbody></table></div>';
+        } else if (q.type === 'text') {
+          if (q.contents && q.contents.length) {
+            html += '<ul>' + q.contents.map((c) => `<li>${escapeHtml(c)}</li>`).join('') + '</ul>';
+          } else {
+            html += '<p class="empty">暂无内容</p>';
+          }
+        } else if (q.type === 'number') {
+          html += `<p>平均值：<strong>${q.average === null ? '暂无' : q.average}</strong></p>`;
+        }
+        html += `<p class="hint">该题回答人数：${q.answered}（被跳过的题不计入）</p>`;
+        div.innerHTML = html;
+        box.appendChild(div);
+      });
+      if (!stats.totalResponses) document.getElementById('message').textContent = '暂无答卷。';
+    }
+
+    load();
+  </script>
+</body>
+</html>

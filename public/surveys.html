@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>我的问卷 · 问卷系统</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="row">
+    <h1>我的问卷</h1>
+    <span><span id="username"></span> <button id="logout" class="secondary">退出登录</button></span>
+  </header>
+
+  <section class="card">
+    <h2>创建问卷</h2>
+    <form id="create-form">
+      <label>标题<input name="title" required></label>
+      <label>说明<textarea name="description"></textarea></label>
+      <label class="inline"><input type="checkbox" name="allowAnonymous"> 允许匿名填写（答卷不记录填写人身份）</label>
+      <label class="inline"><input type="checkbox" name="allowRepeat"> 允许同一人重复填写</label>
+      <button type="submit">创建</button>
+    </form>
+    <p id="create-message"></p>
+  </section>
+
+  <section class="card">
+    <h2>问卷列表</h2>
+    <p class="hint">点击问卷的「管理 / 编辑题目」进入编辑页：在那里添加题目、配置跳转规则并发布问卷。草稿问卷的填写链接在发布后才可用。</p>
+    <div class="table-wrap">
+      <table id="list">
+        <thead><tr><th>标题</th><th>状态</th><th>题目数</th><th>更新时间</th><th>操作</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <script src="/api.js"></script>
+  <script>
+    const STATUS_TEXT = { draft: '草稿', published: '已发布', closed: '已关闭', expired: '已截止' };
+
+    function escapeHtml(text) {
+      return String(text).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
+    async function loadMe() {
+      const me = await fetch('/api/auth/me');
+      if (!me.ok) { location.href = '/login.html'; return; }
+      document.getElementById('username').textContent = (await me.json()).username;
+    }
+
+    async function loadList() {
+      const r = await api('/api/surveys');
+      const tbody = document.querySelector('#list tbody');
+      tbody.innerHTML = '';
+      for (const s of r.data) {
+        const tr = document.createElement('tr');
+        const fillUrl = location.origin + '/survey/' + s.id;
+        const draft = s.status === 'draft';
+        const st = s.effectiveStatus || s.status;
+        const actions = [
+          `<a class="btn-manage" href="/survey.html?id=${s.id}">管理 / 编辑题目</a>`,
+          `<a href="/stats.html?id=${s.id}">统计</a>`,
+          draft
+            ? `<span class="hint">（发布后可填写）</span>`
+            : `<a href="${fillUrl}" target="_blank">填写链接</a>`,
+        ];
+        tr.innerHTML = `<td><a class="row-title" href="/survey.html?id=${s.id}">${escapeHtml(s.title)}</a></td><td><span class="badge badge-${st}">${STATUS_TEXT[st] || st}</span></td><td>${s.questionCount}</td><td>${new Date(s.updatedAt).toLocaleString()}</td><td><div class="btn-group">${actions.join('')}</div></td>`;
+        tbody.appendChild(tr);
+      }
+      if (!r.data.length) tbody.innerHTML = '<tr><td colspan="5" class="empty">还没有问卷，先创建一个吧</td></tr>';
+    }
+
+    document.getElementById('create-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const r = await api('/api/surveys', { method: 'POST', body: {
+        title: fd.get('title'),
+        description: fd.get('description'),
+        allowAnonymous: fd.get('allowAnonymous') === 'on',
+        allowRepeat: fd.get('allowRepeat') === 'on',
+      } });
+      const msg = document.getElementById('create-message');
+      if (r.status === 201) { msg.textContent = '创建成功'; e.target.reset(); loadList(); }
+      else msg.textContent = (r.data && r.data.error) || '创建失败';
+    });
+
+    document.getElementById('logout').addEventListener('click', async () => {
+      await api('/api/auth/logout', { method: 'POST' });
+      location.href = '/login.html';
+    });
+
+    loadMe().then(loadList);
+  </script>
+</body>
+</html>

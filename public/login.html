@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>登录 / 注册 · 问卷系统</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body class="narrow">
+  <h1>问卷系统</h1>
+
+  <div class="two-col">
+    <section class="card">
+      <h2>登录</h2>
+      <form id="login-form">
+        <label>用户名<input name="username" required></label>
+        <label>密码<input name="password" type="password" required></label>
+        <button type="submit">登录</button>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>注册</h2>
+      <p class="hint">用户名 3–20 个字符、不含空白；密码至少 6 位。</p>
+      <form id="register-form">
+        <label>用户名<input name="username" required></label>
+        <label>密码<input name="password" type="password" required></label>
+        <button type="submit">注册并登录</button>
+      </form>
+    </section>
+  </div>
+
+  <p id="message"></p>
+
+  <script src="/api.js"></script>
+  <script>
+    const message = document.getElementById('message');
+    const show = (text) => { message.textContent = text; };
+
+    // 已登录则直接进入问卷列表
+    (async () => {
+      const res = await fetch('/api/auth/me');
+      if (res.ok) location.href = '/surveys.html';
+    })();
+
+    document.getElementById('login-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const r = await api('/api/auth/login', { method: 'POST', body: { username: fd.get('username'), password: fd.get('password') } });
+      if (r.status === 200) { location.href = '/surveys.html'; return; }
+      show(r.data && r.data.error ? r.data.error : '登录失败');
+    });
+
+    document.getElementById('register-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const username = fd.get('username');
+      const password = fd.get('password');
+      const r = await api('/api/auth/register', { method: 'POST', body: { username, password } });
+      if (r.status !== 201) { show(r.data && r.data.error ? r.data.error : '注册失败'); return; }
+      // 注册成功后自动登录（对应业务链"注册 → 登录"）
+      const l = await api('/api/auth/login', { method: 'POST', body: { username, password } });
+      if (l.status === 200) { location.href = '/surveys.html'; return; }
+      show('注册成功，请手动登录');
+    });
+  </script>
+</body>
+</html>

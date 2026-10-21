@@ -1,0 +1,509 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>问卷管理 · 问卷系统</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="page-head">
+    <a href="/surveys.html" class="back-link">← 返回我的问卷</a>
+    <h1 id="survey-title">问卷管理</h1>
+    <p class="meta-line">状态：<span id="status" class="badge"></span> <span id="lock-hint" hidden>（已发布/已关闭，题目结构锁定；可修改标题、说明与截止时间）</span> <span id="deadline-text" class="hint"></span></p>
+  </div>
+
+  <div class="card" id="action-bar">
+    <div class="btn-group">
+      <button id="action-add" class="secondary" hidden>＋ 添加题目</button>
+      <button id="action-publish" hidden>发布问卷</button>
+      <button id="action-close" class="secondary" hidden>关闭问卷</button>
+    </div>
+  </div>
+
+  <section class="card">
+    <h2>基本信息</h2>
+    <form id="info-form">
+      <label>标题<input name="title" required></label>
+      <label>说明<textarea name="description"></textarea></label>
+      <label>截止时间（留空 = 不设截止）
+        <span class="row">
+          <input type="datetime-local" name="deadline" style="width:auto">
+          <button type="button" id="clear-deadline" class="secondary">清除截止时间</button>
+        </span>
+      </label>
+      <button type="submit">保存</button>
+    </form>
+    <p id="info-message"></p>
+  </section>
+
+  <section class="card" id="add-question-section">
+    <h2 id="question-form-title">添加题目</h2>
+    <form id="question-form">
+      <label>题型
+        <select name="type" id="q-type">
+          <option value="single">单选</option>
+          <option value="multi">多选</option>
+          <option value="text">文本填空</option>
+          <option value="number">数字填空</option>
+        </select>
+      </label>
+      <label>题干<input name="title" required></label>
+      <label class="inline"><input type="checkbox" name="required"> 必答</label>
+      <div id="q-options-fields">
+        <label>选项（至少 2 个）</label>
+        <div id="q-option-rows"></div>
+        <button type="button" id="q-add-option" class="secondary small">＋ 添加选项</button>
+      </div>
+      <div id="q-multi-fields" hidden>
+        <label class="inline">最少选择数（留空不限）<input type="number" name="minSelect" min="0" class="small-input"></label>
+        <label class="inline">最多选择数（留空不限）<input type="number" name="maxSelect" min="0" class="small-input"></label>
+        <p class="hint">"必须选择指定数量" = 最少与最多填相同值。</p>
+      </div>
+      <div id="q-text-fields" hidden>
+        <label class="inline">最少字数（留空不限）<input type="number" name="minLength" min="0" class="small-input"></label>
+        <label class="inline">最多字数（留空不限）<input type="number" name="maxLength" min="0" class="small-input"></label>
+      </div>
+      <div id="q-number-fields" hidden>
+        <label class="inline">最小值（留空不限）<input type="number" name="minValue" step="any" class="small-input"></label>
+        <label class="inline">最大值（留空不限）<input type="number" name="maxValue" step="any" class="small-input"></label>
+        <label class="inline"><input type="checkbox" name="integerOnly"> 必须为整数</label>
+      </div>
+      <div class="btn-group">
+        <button type="submit" id="question-submit">添加题目</button>
+      </div>
+    </form>
+    <p id="question-message"></p>
+  </section>
+
+  <section class="card">
+    <h2>题目列表（含跳转规则）</h2>
+    <ol id="questions"></ol>
+  </section>
+
+  <section class="card">
+    <h2>发布与分享</h2>
+    <div class="btn-group">
+      <button id="publish-btn">发布问卷</button>
+      <button id="close-btn" class="secondary" hidden>关闭问卷</button>
+    </div>
+    <p id="publish-message"></p>
+    <p id="fill-link-wrap" hidden>填写链接：<a id="fill-link" target="_blank"></a> <button id="copy-btn" class="secondary small">复制</button></p>
+    <p><a id="stats-link">查看统计 →</a></p>
+  </section>
+
+  <script src="/api.js"></script>
+  <script>
+    const id = new URLSearchParams(location.search).get('id');
+    if (!id) location.href = '/surveys.html';
+    let survey = null;
+    let editingJump = { qid: null, index: null };
+    const STATUS_TEXT = { draft: '草稿', published: '已发布', closed: '已关闭' };
+    const TYPE_TEXT = { single: '单选', multi: '多选', text: '文本', number: '数字' };
+    const OP_TEXT = { eq: '=', ne: '≠', lt: '<', lte: '≤', gt: '>', gte: '≥' };
+
+    function escapeHtml(text) {
+      return String(text).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
+    function syncTypeFields() {
+      const type = document.getElementById('q-type').value;
+      document.getElementById('q-options-fields').hidden = !(type === 'single' || type === 'multi');
+      document.getElementById('q-multi-fields').hidden = type !== 'multi';
+      document.getElementById('q-text-fields').hidden = type !== 'text';
+      document.getElementById('q-number-fields').hidden = type !== 'number';
+    }
+
+    function configSummary(q) {
+      const parts = [];
+      if (q.type === 'multi') {
+        if (q.minSelect !== null && q.maxSelect !== null && q.minSelect === q.maxSelect) parts.push(`恰好选 ${q.minSelect} 项`);
+        else {
+          const s = [q.minSelect !== null ? `最少 ${q.minSelect}` : null, q.maxSelect !== null ? `最多 ${q.maxSelect}` : null].filter(Boolean).join('，');
+          if (s) parts.push(s);
+        }
+      } else if (q.type === 'text') {
+        const s = [q.minLength !== null ? `至少 ${q.minLength} 字` : null, q.maxLength !== null ? `最多 ${q.maxLength} 字` : null].filter(Boolean).join('，');
+        if (s) parts.push(s);
+      } else if (q.type === 'number') {
+        const s = [q.minValue !== null ? `≥ ${q.minValue}` : null, q.maxValue !== null ? `≤ ${q.maxValue}` : null].filter(Boolean).join('，');
+        if (s) parts.push(s + (q.integerOnly ? '，整数' : ''));
+      }
+      return parts.join('；');
+    }
+
+    function toLocalInput(dateIso) {
+      if (!dateIso) return '';
+      const d = new Date(dateIso);
+      const pad = (n) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+
+    // —— 选项行编辑（添加/编辑共用；编辑时回传原选项 id 保持跳转引用稳定）——
+    function addOptionRow(optionId, label) {
+      const box = document.getElementById('q-option-rows');
+      const row = document.createElement('div');
+      row.className = 'option-row';
+      row.dataset.optionId = optionId || '';
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'option-label';
+      input.placeholder = '选项文字';
+      input.value = label || '';
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'secondary small';
+      del.textContent = '删除';
+      del.addEventListener('click', () => row.remove());
+      row.appendChild(input);
+      row.appendChild(del);
+      box.appendChild(row);
+    }
+
+    function resetQuestionForm() {
+      document.getElementById('question-form').reset();
+      document.getElementById('question-form-title').textContent = '添加题目';
+      document.getElementById('question-submit').textContent = '添加题目';
+      document.getElementById('q-option-rows').innerHTML = '';
+      addOptionRow('', '');
+      addOptionRow('', '');
+      syncTypeFields();
+    }
+
+    function collectQuestionBody(fd) {
+      const type = fd.get('type');
+      const body = { type, title: fd.get('title'), required: fd.get('required') === 'on' };
+      if (type === 'single' || type === 'multi') {
+        body.options = [...document.querySelectorAll('#q-option-rows .option-row')].map((row) => ({
+          label: row.querySelector('.option-label').value.trim(),
+          ...(row.dataset.optionId ? { id: row.dataset.optionId } : {}),
+        }));
+        if (type === 'multi') {
+          body.minSelect = fd.get('minSelect') === '' ? null : Number(fd.get('minSelect'));
+          body.maxSelect = fd.get('maxSelect') === '' ? null : Number(fd.get('maxSelect'));
+        }
+      } else if (type === 'text') {
+        body.minLength = fd.get('minLength') === '' ? null : Number(fd.get('minLength'));
+        body.maxLength = fd.get('maxLength') === '' ? null : Number(fd.get('maxLength'));
+      } else if (type === 'number') {
+        body.minValue = fd.get('minValue') === '' ? null : Number(fd.get('minValue'));
+        body.maxValue = fd.get('maxValue') === '' ? null : Number(fd.get('maxValue'));
+        body.integerOnly = fd.get('integerOnly') === 'on';
+      }
+      return body;
+    }
+
+    async function load() {
+      const r = await api('/api/surveys/' + id);
+      if (r.status === 404) {
+        document.body.innerHTML = '<div class="card"><p>问卷不存在或无权访问。<a href="/surveys.html">返回列表</a></p></div>';
+        return;
+      }
+      survey = r.data;
+      editingJump = { qid: null, index: null };
+      document.getElementById('survey-title').textContent = survey.title;
+      const statusEl = document.getElementById('status');
+      statusEl.textContent = STATUS_TEXT[survey.status] || survey.status;
+      statusEl.className = 'badge badge-' + survey.status;
+      document.querySelector('#info-form [name=title]').value = survey.title;
+      document.querySelector('#info-form [name=description]').value = survey.description || '';
+      document.querySelector('#info-form [name=deadline]').value = toLocalInput(survey.deadline);
+      const deadlineText = document.getElementById('deadline-text');
+      if (survey.deadline) {
+        const expired = new Date(survey.deadline) < new Date();
+        deadlineText.textContent = `截止时间：${new Date(survey.deadline).toLocaleString()}${expired ? '（已截止）' : ''}`;
+      } else {
+        deadlineText.textContent = '';
+      }
+      const published = survey.status === 'published';
+      const closed = survey.status === 'closed';
+      document.getElementById('lock-hint').hidden = !(published || closed);
+      document.getElementById('add-question-section').hidden = published || closed;
+      document.getElementById('publish-btn').hidden = published || closed;
+      document.getElementById('close-btn').hidden = !published;
+      document.getElementById('action-add').hidden = published || closed;
+      document.getElementById('action-publish').hidden = published || closed;
+      document.getElementById('action-close').hidden = !published;
+      const fillUrl = location.origin + '/survey/' + survey.id;
+      document.getElementById('fill-link').href = fillUrl;
+      document.getElementById('fill-link').textContent = fillUrl;
+      document.getElementById('fill-link-wrap').hidden = !published;
+      document.getElementById('stats-link').href = '/stats.html?id=' + survey.id;
+      renderQuestions();
+    }
+
+    function renderQuestions() {
+      const ol = document.getElementById('questions');
+      ol.innerHTML = '';
+      const draft = survey.status === 'draft';
+      survey.questions.forEach((q, i) => {
+        const li = document.createElement('li');
+        li.dataset.qid = q.id;
+        const summary = configSummary(q);
+        const html = `<div class="q-head">
+          <div class="q-title"><strong>${i + 1}. ${escapeHtml(q.title)}</strong>
+            <span class="badge badge-type">${TYPE_TEXT[q.type] || q.type}</span>
+            ${q.required ? '<span class="badge badge-required">必答</span>' : ''}
+          </div>
+        </div>` +
+        (summary ? `<p class="q-summary">${escapeHtml(summary)}</p>` : '') +
+        (q.options && q.options.length ? `<div class="q-options">${q.options.map((o) => `<span class="chip">${escapeHtml(o.label)}</span>`).join('')}</div>` : '');
+        li.innerHTML = html;
+        ol.appendChild(li);
+        if (draft) renderJumpBox(li, q);
+      });
+      if (!survey.questions.length) ol.innerHTML = '<li class="empty">还没有题目，先添加一道吧</li>';
+    }
+
+    // —— 题目添加表单 ——
+    document.getElementById('q-type').addEventListener('change', syncTypeFields);
+    document.getElementById('q-add-option').addEventListener('click', () => addOptionRow('', ''));
+
+    document.getElementById('question-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const body = collectQuestionBody(fd);
+      const msg = document.getElementById('question-message');
+      msg.textContent = '';
+      const r = await api(`/api/surveys/${id}/questions`, { method: 'POST', body });
+      if (r.status === 201) { msg.textContent = '已添加题目'; resetQuestionForm(); load(); }
+      else msg.textContent = (r.data && r.data.error) || '添加失败';
+    });
+
+    // —— 跳转规则编辑器 ——
+    function jumpable(q) { return ['single', 'multi', 'number'].includes(q.type); }
+
+    function laterQuestions(q) {
+      const idx = survey.questions.findIndex((x) => x.id === q.id);
+      return survey.questions.slice(idx + 1);
+    }
+
+    function conditionText(q, rule) {
+      const c = (rule.conditions || [])[0] || {};
+      const labels = Object.fromEntries((q.options || []).map((o) => [o.id, o.label]));
+      if (q.type === 'single') return `选中「${labels[c.optionId] || '?'}」`;
+      if (q.type === 'multi') {
+        const names = (c.optionIds || []).map((x) => labels[x] || '?').join('、');
+        return `${rule.matchMode === 'all' ? '全部选中' : '任一选中'}「${names}」`;
+      }
+      if (q.type === 'number') return `答案 ${OP_TEXT[c.op] || '?'} ${c.value}`;
+      return '';
+    }
+
+    function targetText(q, targetId) {
+      const t = survey.questions.find((x) => x.id === targetId);
+      if (!t) return '目标不存在';
+      const idx = survey.questions.findIndex((x) => x.id === targetId);
+      return `第 ${idx + 1} 题 ${t.title}`;
+    }
+
+    function jumpCondControlsHtml(q) {
+      if (q.type === 'single') {
+        return `<select name="jump-optionId">${q.options.map((o) => `<option value="${o.id}">${escapeHtml(o.label)}</option>`).join('')}</select>`;
+      }
+      if (q.type === 'multi') {
+        return `<select name="jump-mode"><option value="any">任一选中</option><option value="all">全部选中</option></select> ` +
+          q.options.map((o) => `<label class="inline"><input type="checkbox" name="jump-optionIds" value="${o.id}"> ${escapeHtml(o.label)}</label>`).join('');
+      }
+      return `<select name="jump-op">${Object.keys(OP_TEXT).map((op) => `<option value="${op}">${OP_TEXT[op]}</option>`).join('')}</select> ` +
+        `<input type="number" name="jump-value" step="any" class="small-input" placeholder="比较值" required>`;
+    }
+
+    function jumpFormHtml(q) {
+      const targets = laterQuestions(q);
+      const targetSelect = targets.length
+        ? `<select name="jump-target">${targets.map((t) => {
+            const i = survey.questions.findIndex((x) => x.id === t.id);
+            return `<option value="${t.id}">第 ${i + 1} 题 ${escapeHtml(t.title)}</option>`;
+          }).join('')}</select>`
+        : '<span class="hint">（后面没有题目，无法配置跳转）</span>';
+      return `<div class="jump-form-fields">
+          <label>条件<span class="jump-cond">${jumpCondControlsHtml(q)}</span></label>
+          <label>跳转到 ${targetSelect}</label>
+        </div>
+        <div class="btn-group">
+          <button type="button" class="jump-save small">添加规则</button>
+          <button type="button" class="jump-cancel secondary small" hidden>取消</button>
+        </div>`;
+    }
+
+    function cloneRules(rules) {
+      return (rules || []).map((r) => ({
+        targetQuestionId: r.targetQuestionId,
+        matchMode: r.matchMode || 'any',
+        conditions: (r.conditions || []).map((c) => ({ optionId: c.optionId, optionIds: [...(c.optionIds || [])], op: c.op, value: c.value })),
+      }));
+    }
+
+    async function saveJumps(qid, rules) {
+      return api(`/api/surveys/${id}/questions/${qid}/jumps`, { method: 'PUT', body: { jumps: rules } });
+    }
+
+    function renderJumpBox(li, q) {
+      const box = document.createElement('div');
+      box.className = 'jump-box';
+      if (!jumpable(q)) {
+        box.innerHTML = '<p class="hint">（文本题不支持跳转规则）</p>';
+        li.appendChild(box);
+        return;
+      }
+      const rules = q.jumps || [];
+      let html = '<p class="hint">跳转规则（按顺序匹配，首条命中生效；未命中按题目顺序继续）：</p>';
+      if (rules.length) {
+        html += '<div class="table-wrap"><table class="jump-table"><thead><tr><th>顺序</th><th>条件</th><th>目标</th><th>操作</th></tr></thead><tbody>';
+        rules.forEach((rule, i) => {
+          html += `<tr>
+            <td>${i + 1}</td>
+            <td>${escapeHtml(conditionText(q, rule))}</td>
+            <td>${escapeHtml(targetText(q, rule.targetQuestionId))}</td>
+            <td><div class="jump-actions">
+              <button type="button" class="secondary small" data-action="up" data-index="${i}" ${i === 0 ? 'disabled' : ''}>上移</button>
+              <button type="button" class="secondary small" data-action="down" data-index="${i}" ${i === rules.length - 1 ? 'disabled' : ''}>下移</button>
+              <button type="button" class="secondary small" data-action="edit" data-index="${i}">编辑</button>
+              <button type="button" class="danger small" data-action="del" data-index="${i}">删除</button>
+            </div></td>
+          </tr>`;
+        });
+        html += '</tbody></table></div>';
+      } else {
+        html += '<p class="empty">暂无规则，按题目顺序填写。</p>';
+      }
+      html += `<div class="jump-form" data-qid="${q.id}">${jumpFormHtml(q)}</div>`;
+      html += '<p class="jump-message"></p>';
+      box.innerHTML = html;
+      li.appendChild(box);
+      bindJumpBox(box, q);
+    }
+
+    function bindJumpBox(box, q) {
+      const form = box.querySelector('.jump-form');
+      const message = box.querySelector('.jump-message');
+      const show = (text) => { message.textContent = text; };
+
+      const bind = () => {
+        form.querySelector('.jump-save').addEventListener('click', onSave);
+        form.querySelector('.jump-cancel').addEventListener('click', onCancel);
+      };
+
+      const resetForm = () => {
+        editingJump = { qid: null, index: null };
+        form.innerHTML = jumpFormHtml(q);
+        bind();
+      };
+
+      const onSave = async () => {
+        const rule = collectJumpForm(form, q);
+        if (!rule) return;
+        const rules = cloneRules(q.jumps);
+        if (editingJump.qid === q.id && editingJump.index !== null) rules[editingJump.index] = rule;
+        else rules.push(rule);
+        const r = await saveJumps(q.id, rules);
+        if (r.status === 200) { resetForm(); show('已保存'); load(); }
+        else show((r.data && r.data.error) || '保存失败');
+      };
+
+      const onCancel = () => resetForm();
+      bind();
+
+      box.querySelector('.jump-table')?.addEventListener('click', async (e) => {
+        const btn = e.target.closest('button[data-action]');
+        if (!btn) return;
+        const i = Number(btn.dataset.index);
+        const action = btn.dataset.action;
+        const rules = cloneRules(q.jumps);
+        if (action === 'up' && i > 0) { [rules[i - 1], rules[i]] = [rules[i], rules[i - 1]]; }
+        else if (action === 'down' && i < rules.length - 1) { [rules[i], rules[i + 1]] = [rules[i + 1], rules[i]]; }
+        else if (action === 'del') {
+          if (!confirm('确定删除这条跳转规则？')) return;
+          rules.splice(i, 1);
+        }
+        else if (action === 'edit') {
+          editingJump = { qid: q.id, index: i };
+          fillJumpForm(form, q, rules[i]);
+          form.querySelector('.jump-save').textContent = '保存修改';
+          form.querySelector('.jump-cancel').hidden = false;
+          return;
+        }
+        const r = await saveJumps(q.id, rules);
+        if (r.status === 200) { resetForm(); show('已保存'); load(); }
+        else show((r.data && r.data.error) || '保存失败');
+      });
+    }
+
+    function fillJumpForm(form, q, rule) {
+      const c = (rule.conditions || [])[0] || {};
+      if (q.type === 'single') form.querySelector('[name=jump-optionId]').value = c.optionId;
+      else if (q.type === 'multi') {
+        form.querySelector('[name=jump-mode]').value = rule.matchMode || 'any';
+        for (const cb of form.querySelectorAll('[name=jump-optionIds]')) cb.checked = (c.optionIds || []).includes(cb.value);
+      } else if (q.type === 'number') {
+        form.querySelector('[name=jump-op]').value = c.op;
+        form.querySelector('[name=jump-value]').value = c.value ?? '';
+      }
+      form.querySelector('[name=jump-target]').value = rule.targetQuestionId;
+    }
+
+    function collectJumpForm(form, q) {
+      const target = form.querySelector('[name=jump-target]');
+      if (!target) return null;
+      let conditions;
+      if (q.type === 'single') {
+        conditions = [{ optionId: form.querySelector('[name=jump-optionId]').value }];
+      } else if (q.type === 'multi') {
+        const ids = [...form.querySelectorAll('[name=jump-optionIds]:checked')].map((el) => el.value);
+        conditions = [{ optionIds: ids }];
+      } else if (q.type === 'number') {
+        const raw = form.querySelector('[name=jump-value]').value;
+        conditions = [{ op: form.querySelector('[name=jump-op]').value, value: raw === '' ? NaN : Number(raw) }];
+      }
+      const matchMode = q.type === 'multi' ? form.querySelector('[name=jump-mode]').value : 'any';
+      return { targetQuestionId: target.value, matchMode, conditions };
+    }
+
+    // —— 基本信息 / 生命周期 ——
+    document.getElementById('info-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const deadlineRaw = fd.get('deadline');
+      const deadline = deadlineRaw === '' ? null : new Date(deadlineRaw).toISOString();
+      const r = await api('/api/surveys/' + id, { method: 'PATCH', body: { title: fd.get('title'), description: fd.get('description'), deadline } });
+      const msg = document.getElementById('info-message');
+      if (r.status === 200) { msg.textContent = '已保存'; load(); }
+      else msg.textContent = (r.data && r.data.error) || '保存失败';
+    });
+
+    document.getElementById('clear-deadline').addEventListener('click', () => {
+      document.querySelector('#info-form [name=deadline]').value = '';
+    });
+
+    const showPublishMsg = (text) => { document.getElementById('publish-message').textContent = text; };
+
+    async function doPublish() {
+      const r = await api('/api/surveys/' + id + '/publish', { method: 'POST' });
+      if (r.status === 200) { showPublishMsg('已发布'); load(); }
+      else showPublishMsg((r.data && r.data.error) || '发布失败');
+    }
+    async function doClose() {
+      const r = await api('/api/surveys/' + id + '/close', { method: 'POST' });
+      if (r.status === 200) { showPublishMsg('问卷已关闭'); load(); }
+      else showPublishMsg((r.data && r.data.error) || '关闭失败');
+    }
+    document.getElementById('publish-btn').addEventListener('click', doPublish);
+    document.getElementById('close-btn').addEventListener('click', doClose);
+    document.getElementById('action-publish').addEventListener('click', doPublish);
+    document.getElementById('action-close').addEventListener('click', doClose);
+    document.getElementById('action-add').addEventListener('click', () => {
+      document.getElementById('add-question-section').scrollIntoView({ behavior: 'smooth' });
+    });
+
+    document.getElementById('copy-btn').addEventListener('click', async () => {
+      await navigator.clipboard.writeText(location.origin + '/survey/' + survey.id);
+      document.getElementById('copy-btn').textContent = '已复制';
+    });
+
+    syncTypeFields();
+    resetQuestionForm();
+    load();
+  </script>
+</body>
+</html>
