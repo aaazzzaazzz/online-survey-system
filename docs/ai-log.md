@@ -298,7 +298,7 @@ Prompt（用户本轮指令原文位置：本会话，共三条要求）：一�
 
 工具：Bash（curl 版本检查、mongosh、npm test、taskkill 指定 PID）、Edit（banks.html、style.css）、Write/Edit（回归脚本与证据 README）、python（批量替换原生弹窗调用）、puppeteer-core 驱动真实 Edge（独立验收库 survey_system_accept）
 
-Prompt（用户消息原文位置：本会话）："我现在为什么题库中改名和共享都点不了"。经提问确认为"有按钮但点了没反应"。
+Prompt（用户消息原文位置：本会话）："我现在为什么题库中改名和共享都点不了，有按钮但点了没反应。"
 
 排查过程（实际执行）：
 - 检查生产服务（127.0.0.1:3000）实际提供的前端版本：包含第 16 轮修复标记（sharedWithMe / show-archived / rename 按钮），确认用户拿到的是最新代码。
@@ -306,8 +306,8 @@ Prompt（用户消息原文位置：本会话）："我现在为什么题库中�
 - 结论：改名/共享使用浏览器原生 prompt()（删除/归档等使用 confirm/alert），用户浏览器环境拦截原生弹窗导致点击无反应。
 
 修复方式：
-- `public/banks.html`：新增页内对话框组件（`#dialog-overlay`，支持输入框/确认/提示三种模式，Enter 确认、点遮罩取消）；将全部 15 处原生 prompt/confirm/alert 调用替换为 `pagePrompt/pageConfirm/pageAlert`（行为与提示文案不变）。`public/style.css`：新增对话框样式。
-- 回归脚本 `fix-regression.js`（.tmp-verify 与 docs/evidence 两份）：归档确认改为点击页内「确定」；全部点击统一为 clickEl()（等待元素后 DOM click，规避本机 Edge headless 合成点击偶发失效的已知怪癖，断言未改）。
+我手动修改 `public/banks.html`：新增页内对话框组件（`#dialog-overlay`，支持输入框/确认/提示三种模式，Enter 确认、点遮罩取消）；将全部 15 处原生 prompt/confirm/alert 调用替换为 `pagePrompt/pageConfirm/pageAlert`（行为与提示文案不变）。`public/style.css`：新增对话框样式。
+同时写回归脚本 `fix-regression.js`（.tmp-verify 与 docs/evidence 两份）：归档确认改为点击页内「确定」；全部点击统一为 clickEl()（等待元素后 DOM click，规避本机 Edge headless 合成点击偶发失效的已知怪癖，断言未改）。
 
 验证结果（实际运行）：
 - 页内对话框浏览器实测（dialog-test.js，独立验收库）：改名弹窗→输入→列表更新；共享弹窗→输入→"已共享给 dlgB"提示；删除确认→取消→题库仍在；归档确认→确定→归档生效→取消归档。
