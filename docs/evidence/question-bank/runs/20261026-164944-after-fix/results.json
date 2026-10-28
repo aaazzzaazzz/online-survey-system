@@ -1,0 +1,24 @@
+{
+  "results": [
+    {
+      "step": "异常",
+      "ok": false,
+      "detail": "回归中断：Node is either not clickable or not an Element"
+    }
+  ],
+  "pageErrors": {
+    "A": [],
+    "B": []
+  },
+  "consoleErrors": {
+    "A": [
+      "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+      "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    ],
+    "B": [
+      "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+      "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    ]
+  },
+  "at": "2026-10-26T08:49:48.043Z"
+}

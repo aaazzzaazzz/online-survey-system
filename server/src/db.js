@@ -1,4 +1,4 @@
-// MongoDB 连接与索引。索引与 docs/database.md §8 保持一致，集中在此创建。
+// MongoDB 连接与索引。索引与 docs/database.md §9 保持一致，集中在此创建。
 const { MongoClient } = require('mongodb');
 const config = require('./config');
 
@@ -29,6 +29,27 @@ async function ensureIndexes(db) {
       partialFilterExpression: { respondentId: { $type: 'objectId' }, repeatAllowed: false },
     },
   );
+  // 题库与题目版本（第 13 轮新增集合；均为追加，不影响现有集合与数据）
+  await db.collection('question_banks').createIndex({ ownerId: 1, updatedAt: -1 });
+  await db.collection('question_banks').createIndex({ 'sharedWith.userId': 1 });
+  await db.collection('questions').createIndex({ bankId: 1, updatedAt: -1 });
+  await db.collection('questions').createIndex({ ownerId: 1 });
+  // 单题共享（第 20 轮新增）：共享给我的题目列表
+  await db.collection('questions').createIndex({ 'sharedWith.userId': 1 });
+  // 版本号唯一（versionNo 由 versionCount $inc 原子分配，唯一索引兜底）
+  await db.collection('question_versions').createIndex({ questionId: 1, versionNo: 1 }, { unique: true });
+  await db.collection('question_versions').createIndex({ questionId: 1, parentVersionNo: 1 });
+  // clientToken 幂等（防重试重复建版本）：仅带 token 的版本受唯一约束
+  await db.collection('question_versions').createIndex(
+    { questionId: 1, clientToken: 1 },
+    {
+      name: 'unique_client_token_per_question',
+      unique: true,
+      partialFilterExpression: { clientToken: { $exists: true } },
+    },
+  );
+  // 题目使用关系派生查询（multikey）
+  await db.collection('surveys').createIndex({ 'questions.sourceQuestionId': 1 });
 }
 
 function getDb() {

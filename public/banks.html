@@ -1,0 +1,784 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>题库管理 · 问卷系统</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="row">
+    <h1>题库管理</h1>
+    <span><a class="back-link" href="/surveys.html">← 返回我的问卷</a> <span id="username"></span> <button id="logout" class="secondary">退出登录</button></span>
+  </header>
+
+  <section class="card">
+    <h2>我的题库</h2>
+    <div id="my-banks" class="empty">加载中…</div>
+    <form id="create-bank-form">
+      <label>新建题库名称<input name="name" required maxlength="50"></label>
+      <label>说明<textarea name="description"></textarea></label>
+      <button type="submit">新建题库</button>
+    </form>
+    <p id="bank-message"></p>
+  </section>
+
+  <section class="card">
+    <h2>共享给我的题库</h2>
+    <div id="shared-banks" class="empty">加载中…</div>
+  </section>
+
+  <section class="card">
+    <h2>共享给我的题目（单题共享）</h2>
+    <div id="shared-questions" class="empty">加载中…</div>
+  </section>
+
+  <section class="card" id="bank-panel" hidden>
+    <h2 id="bank-panel-title">题库</h2>
+    <p id="bank-panel-meta" class="meta-line"></p>
+    <div class="btn-group">
+      <button id="toggle-new-question" class="secondary">＋ 新建题目</button>
+      <button id="toggle-from-survey" class="secondary">＋ 从问卷存入题目</button>
+    </div>
+
+    <div id="new-question-box" hidden>
+      <h3>新建题目（将创建 v1）</h3>
+      <form id="question-form">
+        <label>题型
+          <select name="type" id="q-type">
+            <option value="single">单选</option>
+            <option value="multi">多选</option>
+            <option value="text">文本填空</option>
+            <option value="number">数字填空</option>
+          </select>
+        </label>
+        <label>题干<input name="title" required></label>
+        <label class="inline"><input type="checkbox" name="required"> 必答</label>
+        <div id="q-options-fields">
+          <label>选项（至少 2 个）</label>
+          <div id="q-option-rows"></div>
+          <button type="button" id="q-add-option" class="secondary small">＋ 添加选项</button>
+        </div>
+        <div id="q-multi-fields" hidden>
+          <label class="inline">最少选择数（留空不限）<input type="number" name="minSelect" min="0" class="small-input"></label>
+          <label class="inline">最多选择数（留空不限）<input type="number" name="maxSelect" min="0" class="small-input"></label>
+        </div>
+        <div id="q-text-fields" hidden>
+          <label class="inline">最少字数（留空不限）<input type="number" name="minLength" min="0" class="small-input"></label>
+          <label class="inline">最多字数（留空不限）<input type="number" name="maxLength" min="0" class="small-input"></label>
+        </div>
+        <div id="q-number-fields" hidden>
+          <label class="inline">最小值（留空不限）<input type="number" name="minValue" step="any" class="small-input"></label>
+          <label class="inline">最大值（留空不限）<input type="number" name="maxValue" step="any" class="small-input"></label>
+          <label class="inline"><input type="checkbox" name="integerOnly"> 必须为整数</label>
+        </div>
+        <label>版本说明<input name="changeNote"></label>
+        <button type="submit">创建题目（v1）</button>
+      </form>
+      <p id="question-message"></p>
+    </div>
+
+    <div id="from-survey-box" hidden>
+      <h3>从问卷存入题目（将创建 v1，剥离问卷内跳转配置）</h3>
+      <form id="from-survey-form">
+        <label>选择问卷<select name="survey" id="from-survey-select" required></select></label>
+        <label>选择题目<select name="question" id="from-survey-question" required></select></label>
+        <button type="submit">存入题库</button>
+      </form>
+      <p id="from-survey-message"></p>
+    </div>
+
+    <h3>题库中的题目 <label class="inline"><input type="checkbox" id="show-archived"> 显示已归档</label></h3>
+    <div class="table-wrap">
+      <table id="bank-questions">
+        <thead><tr><th>题干</th><th>题型</th><th>最新版本</th><th>状态</th><th>操作</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card" id="question-panel" hidden>
+    <h2 id="question-panel-title">题目详情</h2>
+    <p id="question-panel-meta" class="meta-line"></p>
+    <div class="btn-group">
+      <button class="secondary" data-tab="latest">当前版本</button>
+      <button class="secondary" data-tab="versions">版本历史</button>
+      <button class="secondary" data-tab="usages">使用关系</button>
+      <button class="secondary" data-tab="stats">跨问卷统计</button>
+      <button class="secondary" data-tab="shares" id="tab-btn-shares" hidden>共享</button>
+      <button id="action-archive" class="secondary">归档</button>
+      <button id="action-unarchive" class="secondary" hidden>取消归档</button>
+      <button id="action-delete" class="danger">删除题目</button>
+    </div>
+    <div id="tab-latest"></div>
+    <div id="tab-versions" hidden></div>
+    <div id="tab-usages" hidden></div>
+    <div id="tab-stats" hidden></div>
+    <div id="tab-shares" hidden></div>
+  </section>
+
+  <!-- 页内对话框：替代原生 prompt/confirm/alert（部分浏览器环境会拦截原生弹窗，导致按钮"点了没反应"） -->
+  <div id="dialog-overlay" hidden>
+    <div class="dialog-box">
+      <p id="dialog-message"></p>
+      <label id="dialog-label" hidden></label>
+      <input id="dialog-input" hidden>
+      <label id="dialog-label2" hidden></label>
+      <input id="dialog-input2" hidden>
+      <div class="btn-group">
+        <button id="dialog-ok">确定</button>
+        <button id="dialog-cancel" class="secondary" hidden>取消</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/api.js"></script>
+  <script>
+    const TYPE_TEXT = { single: '单选', multi: '多选', text: '文本', number: '数字' };
+    const STATUS_TEXT = { draft: '草稿', published: '已发布', closed: '已关闭', expired: '已截止' };
+    let state = { banks: [], bank: null, questions: [], question: null };
+
+    function escapeHtml(text) {
+      return String(text).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
+    // —— 页内对话框（替代原生 prompt/confirm/alert；部分浏览器会拦截原生弹窗）——
+    let dialogResolve = null;
+    const overlay = document.getElementById('dialog-overlay');
+    const dialogMessage = document.getElementById('dialog-message');
+    const dialogInput = document.getElementById('dialog-input');
+    const dialogLabel = document.getElementById('dialog-label');
+    const dialogInput2 = document.getElementById('dialog-input2');
+    const dialogLabel2 = document.getElementById('dialog-label2');
+    const dialogOk = document.getElementById('dialog-ok');
+    const dialogCancel = document.getElementById('dialog-cancel');
+
+    // input = 单输入框（返回输入值）；配合 input2Label/input2Default 时返回 {name, description}；否则返回 true
+    function showDialog(message, {
+      input = false, inputLabel = '', defaultValue = '', input2Label = '', input2Default = '', cancelable = false, okText = '确定',
+    } = {}) {
+      return new Promise((resolve) => {
+        dialogResolve = resolve;
+        dialogMessage.textContent = message;
+        dialogMessage.style.whiteSpace = input ? 'normal' : 'pre-wrap';
+        dialogLabel.hidden = !input;
+        dialogLabel.textContent = inputLabel;
+        dialogInput.hidden = !input;
+        dialogInput.value = defaultValue;
+        const hasSecond = input && input2Label !== '';
+        dialogLabel2.hidden = !hasSecond;
+        dialogLabel2.textContent = input2Label;
+        dialogInput2.hidden = !hasSecond;
+        dialogInput2.value = input2Default;
+        dialogCancel.hidden = !cancelable;
+        dialogOk.textContent = okText;
+        overlay.hidden = false;
+        if (input) dialogInput.focus();
+      });
+    }
+    function closeDialog(value) {
+      overlay.hidden = true;
+      if (dialogResolve) { const r = dialogResolve; dialogResolve = null; r(value); }
+    }
+    dialogOk.addEventListener('click', () => {
+      if (dialogInput.hidden) return closeDialog(true);
+      if (!dialogInput2.hidden) return closeDialog({ name: dialogInput.value, description: dialogInput2.value });
+      return closeDialog(dialogInput.value);
+    });
+    dialogCancel.addEventListener('click', () => closeDialog(null));
+    dialogInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') dialogOk.click(); });
+    dialogInput2.addEventListener('keydown', (e) => { if (e.key === 'Enter') dialogOk.click(); });
+    overlay.addEventListener('click', (e) => { if (e.target === overlay && !dialogCancel.hidden) closeDialog(null); });
+
+    const pagePrompt = (message, defaultValue) => showDialog(message, { input: true, inputLabel: '', defaultValue, cancelable: true });
+    const pageConfirm = (message) => showDialog(message, { cancelable: true });
+    const pageAlert = (message) => showDialog(message);
+
+    // —— 题型表单 ——
+    function syncTypeFields() {
+      const type = document.getElementById('q-type').value;
+      document.getElementById('q-options-fields').hidden = !(type === 'single' || type === 'multi');
+      document.getElementById('q-multi-fields').hidden = type !== 'multi';
+      document.getElementById('q-text-fields').hidden = type !== 'text';
+      document.getElementById('q-number-fields').hidden = type !== 'number';
+    }
+    function addOptionRow(optionId, label) {
+      const box = document.getElementById('q-option-rows');
+      const row = document.createElement('div');
+      row.className = 'option-row';
+      row.dataset.optionId = optionId || '';
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'option-label';
+      input.placeholder = '选项文字';
+      input.value = label || '';
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'secondary small';
+      del.textContent = '删除';
+      del.addEventListener('click', () => row.remove());
+      row.appendChild(input); row.appendChild(del);
+      box.appendChild(row);
+    }
+    function resetOptionRows() {
+      const box = document.getElementById('q-option-rows');
+      box.innerHTML = '';
+      addOptionRow('', ''); addOptionRow('', '');
+    }
+    function collectQuestionBody(fd) {
+      const type = fd.get('type');
+      const body = { type, title: fd.get('title'), required: fd.get('required') === 'on' };
+      if (type === 'single' || type === 'multi') {
+        body.options = [...document.querySelectorAll('#q-option-rows .option-row')].map((row) => ({
+          label: row.querySelector('.option-label').value.trim(),
+          ...(row.dataset.optionId ? { id: row.dataset.optionId } : {}),
+        }));
+        if (type === 'multi') {
+          body.minSelect = fd.get('minSelect') === '' ? null : Number(fd.get('minSelect'));
+          body.maxSelect = fd.get('maxSelect') === '' ? null : Number(fd.get('maxSelect'));
+        }
+      } else if (type === 'text') {
+        body.minLength = fd.get('minLength') === '' ? null : Number(fd.get('minLength'));
+        body.maxLength = fd.get('maxLength') === '' ? null : Number(fd.get('maxLength'));
+      } else if (type === 'number') {
+        body.minValue = fd.get('minValue') === '' ? null : Number(fd.get('minValue'));
+        body.maxValue = fd.get('maxValue') === '' ? null : Number(fd.get('maxValue'));
+        body.integerOnly = fd.get('integerOnly') === 'on';
+      }
+      return body;
+    }
+
+    function contentSummary(c) {
+      const parts = [];
+      if (c.type === 'single' || c.type === 'multi') parts.push('选项：' + (c.options || []).map((o) => o.label).join('、'));
+      else if (c.type === 'text') parts.push([c.minLength !== null && c.minLength !== undefined ? `至少 ${c.minLength} 字` : null, c.maxLength !== null && c.maxLength !== undefined ? `最多 ${c.maxLength} 字` : null].filter(Boolean).join('，') || '无长度限制');
+      else if (c.type === 'number') parts.push([c.minValue !== null && c.minValue !== undefined ? `≥ ${c.minValue}` : null, c.maxValue !== null && c.maxValue !== undefined ? `≤ ${c.maxValue}` : null, c.integerOnly ? '整数' : null].filter(Boolean).join('，') || '无范围限制');
+      if (c.required) parts.push('必答');
+      return parts.join('；') || '—';
+    }
+
+    // —— 页面加载 ——
+    async function loadMe() {
+      const me = await api('/api/auth/me');
+      document.getElementById('username').textContent = me.data ? me.data.username : '';
+    }
+    document.getElementById('logout').addEventListener('click', async () => {
+      await api('/api/auth/logout', { method: 'POST' });
+      location.href = '/login.html';
+    });
+
+    async function loadBanks() {
+      const r = await api('/api/banks');
+      state.banks = r.data;
+      const mine = document.getElementById('my-banks');
+      const shared = document.getElementById('shared-banks');
+      mine.innerHTML = state.banks.mine.length
+        ? state.banks.mine.map(bankHtml('mine')).join('')
+        : '<p class="empty">还没有题库，先在下方新建一个。</p>';
+      shared.innerHTML = state.banks.sharedWithMe.length
+        ? state.banks.sharedWithMe.map(bankHtml('sharedWithMe')).join('')
+        : '<p class="empty">暂无共享给我的题库。</p>';
+      // 共享给我的题目（单题共享，第 20 轮）
+      const qs = await api('/api/questions/shared');
+      const sharedQ = document.getElementById('shared-questions');
+      sharedQ.innerHTML = (qs.data || []).length
+        ? (qs.data || []).map((q) => `<div class="bank-row" data-shared-question="${q.id}">
+            <strong>${escapeHtml(q.title)}</strong>
+            <span class="hint">来自题库「${escapeHtml(q.bankName || '')}」· 最新 v${q.latestVersionNo} · ${q.status === 'active' ? '启用' : '已归档'}</span>
+            <div class="btn-group"><button class="small" data-shared-question="${q.id}">打开题目</button></div>
+          </div>`).join('')
+        : '<p class="empty">暂无共享给我的题目。</p>';
+      sharedQ.querySelectorAll('[data-shared-question]').forEach((el) => {
+        el.addEventListener('click', () => {
+          const q = (qs.data || []).find((x) => x.id === el.dataset.sharedQuestion);
+          openQuestion(q);
+        });
+      });
+      bindBankActions();
+    }
+
+    function bankHtml(kind) {
+      return (b) => `<div class="bank-row" data-bank-id="${b.id}" data-kind="${kind}">
+        <strong>${escapeHtml(b.name)}</strong>
+        <span class="hint">${escapeHtml(b.description || '')}</span>
+        <div class="btn-group">
+          <button class="small" data-action="open">打开</button>
+          ${kind === 'mine' ? '<button class="secondary small" data-action="rename">改名</button><button class="secondary small" data-action="share">共享</button><button class="danger small" data-action="delete">删除</button>' : ''}
+        </div>
+      </div>`;
+    }
+
+    function bindBankActions() {
+      document.querySelectorAll('.bank-row').forEach((row) => {
+        const bankId = row.dataset.bankId;
+        const bank = (state.banks[row.dataset.kind] || []).find((b) => b.id === bankId);
+        row.querySelectorAll('button[data-action]').forEach((btn) => {
+          btn.addEventListener('click', async () => {
+            const action = btn.dataset.action;
+            if (action === 'open') return openBank(bank);
+            if (action === 'rename') {
+              // 名称与说明一起编辑（说明在创建后也需要可修改）
+              const value = await showDialog('修改题库信息', {
+                input: true, inputLabel: '题库名称', defaultValue: bank.name,
+                input2Label: '说明（可留空）', input2Default: bank.description || '', cancelable: true,
+              });
+              if (!value) return;
+              const name = (value.name || '').trim();
+              if (!name) return;
+              const description = (value.description || '').trim();
+              const r = await api('/api/banks/' + bankId, { method: 'PATCH', body: { name, description } });
+              if (r.status === 200) {
+                loadBanks();
+                // 已打开的题库面板同步更新标题与说明（loadBanks 只刷新列表，不刷新面板，避免出现新旧两个名字）
+                if (state.bank && state.bank.id === bankId) {
+                  state.bank.name = name;
+                  state.bank.description = description;
+                  document.getElementById('bank-panel-title').textContent = state.bank.name + (state.bank.role === 'viewer' ? '（共享 · 只读）' : '');
+                  document.getElementById('bank-panel-meta').textContent = state.bank.description || '';
+                }
+              } else await pageAlert((r.data && r.data.error) || '修改失败');
+            } else if (action === 'share') {
+              const username = await pagePrompt('共享给哪个用户名？（首期只读共享：对方可查看并复用题目）');
+              if (!username || !username.trim()) return;
+              const r = await api('/api/banks/' + bankId + '/share', { method: 'POST', body: { username: username.trim() } });
+              if (r.status === 200) await pageAlert('已共享给 ' + username.trim()); else await pageAlert((r.data && r.data.error) || '共享失败');
+            } else if (action === 'delete') {
+              if (!(await pageConfirm('确定删除题库「' + bank.name + '」？（题库中还有题目时无法删除）'))) return;
+              const r = await api('/api/banks/' + bankId, { method: 'DELETE' });
+              if (r.status === 200) loadBanks(); else await pageAlert((r.data && r.data.error) || '删除失败');
+            }
+          });
+        });
+      });
+    }
+
+    // —— 题库面板 ——
+    async function openBank(bank) {
+      state.bank = bank;
+      state.question = null;
+      document.getElementById('bank-panel').hidden = false;
+      document.getElementById('question-panel').hidden = true;
+      document.getElementById('bank-panel-title').textContent = bank.name + (bank.role === 'viewer' ? '（共享 · 只读）' : '');
+      document.getElementById('bank-panel-meta').textContent = bank.description || '';
+      const viewer = bank.role === 'viewer';
+      document.getElementById('toggle-new-question').hidden = viewer;
+      document.getElementById('toggle-from-survey').hidden = viewer;
+      await loadBankQuestions();
+      const panel = document.getElementById('bank-panel');
+      if (panel) panel.scrollIntoView({ behavior: 'smooth' });
+    }
+
+    async function loadBankQuestions() {
+      const r = await api('/api/banks/' + state.bank.id + '/questions');
+      state.questions = r.data || [];
+      // 默认隐藏归档题；勾选「显示已归档」后可见并可从详情取消归档（D1 修复）。
+      // 归档题只是管理/恢复入口，仍不能加入新问卷（选题入口只列 active）。
+      const showArchived = document.getElementById('show-archived').checked;
+      const visible = showArchived ? state.questions : state.questions.filter((q) => q.status !== 'archived');
+      const tbody = document.querySelector('#bank-questions tbody');
+      tbody.innerHTML = visible.map((q) => `<tr>
+        <td><a class="row-title" href="javascript:void(0)" data-open-question="${q.id}">${escapeHtml(q.title)}</a></td>
+        <td>${TYPE_TEXT[q.type] || q.type}</td>
+        <td>v${q.latestVersionNo}</td>
+        <td>${q.status === 'active' ? '启用' : '<span class="badge badge-warn">已归档</span>'}</td>
+        <td><button class="small" data-open-question="${q.id}">查看详情</button></td>
+      </tr>`).join('') || `<tr><td colspan="5" class="empty">题库中还没有题目${showArchived ? '' : '（如需恢复归档题，请勾选上方「显示已归档」）'}</td></tr>`;
+      tbody.querySelectorAll('[data-open-question]').forEach((el) => {
+        el.addEventListener('click', () => {
+          const q = state.questions.find((x) => x.id === el.dataset.openQuestion);
+          openQuestion(q);
+        });
+      });
+    }
+    document.getElementById('show-archived').addEventListener('change', () => loadBankQuestions());
+
+    // —— 新建题目（v1）——
+    document.getElementById('toggle-new-question').addEventListener('click', () => {
+      const box = document.getElementById('new-question-box');
+      box.hidden = !box.hidden;
+      document.getElementById('from-survey-box').hidden = true;
+      if (!box.hidden) resetOptionRows();
+    });
+    document.getElementById('q-type').addEventListener('change', syncTypeFields);
+    document.getElementById('q-add-option').addEventListener('click', () => addOptionRow('', ''));
+    document.getElementById('question-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const body = collectQuestionBody(fd);
+      body.changeNote = fd.get('changeNote');
+      const r = await api('/api/banks/' + state.bank.id + '/questions', { method: 'POST', body });
+      const msg = document.getElementById('question-message');
+      if (r.status === 201) { msg.textContent = '已创建题目（v1）'; e.target.reset(); resetOptionRows(); syncTypeFields(); loadBankQuestions(); }
+      else msg.textContent = (r.data && r.data.error) || '创建失败';
+    });
+
+    // —— 从问卷存入 ——
+    document.getElementById('toggle-from-survey').addEventListener('click', async () => {
+      const box = document.getElementById('from-survey-box');
+      box.hidden = !box.hidden;
+      document.getElementById('new-question-box').hidden = true;
+      if (!box.hidden) {
+        const r = await api('/api/surveys');
+        const sel = document.getElementById('from-survey-select');
+        sel.innerHTML = (r.data || []).map((s) => `<option value="${s.id}">${escapeHtml(s.title)}</option>`).join('');
+        sel.dispatchEvent(new Event('change'));
+      }
+    });
+    document.getElementById('from-survey-select').addEventListener('change', async (e) => {
+      const r = await api('/api/surveys/' + e.target.value);
+      const sel = document.getElementById('from-survey-question');
+      sel.innerHTML = (r.data ? r.data.questions : []).map((q) => `<option value="${q.id}">${escapeHtml(q.title)}</option>`).join('');
+    });
+    document.getElementById('from-survey-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const r = await api('/api/banks/' + state.bank.id + '/questions/from-survey', {
+        method: 'POST',
+        body: { surveyId: fd.get('survey'), questionId: fd.get('question') },
+      });
+      const msg = document.getElementById('from-survey-message');
+      if (r.status === 201) { msg.textContent = '已存入题库（v1）'; loadBankQuestions(); }
+      else msg.textContent = (r.data && r.data.error) || '存入失败';
+    });
+
+    // —— 题目详情 ——
+    async function openQuestion(q) {
+      state.question = q;
+      document.getElementById('question-panel').hidden = false;
+      document.getElementById('question-panel-title').textContent = q.title;
+      document.getElementById('question-panel-meta').textContent = `题型：${TYPE_TEXT[q.type] || q.type}；最新版本 v${q.latestVersionNo}`;
+      const detail = await api('/api/questions/' + q.id);
+      state.question = detail.data;
+      document.getElementById('action-archive').hidden = detail.data.status === 'archived';
+      document.getElementById('action-unarchive').hidden = detail.data.status !== 'archived';
+      document.getElementById('tab-btn-shares').hidden = detail.data.role !== 'owner';
+      document.getElementById('question-panel-title').textContent = detail.data.title;
+      document.getElementById('question-panel-meta').textContent = `题型：${TYPE_TEXT[detail.data.type] || detail.data.type}；最新版本 v${detail.data.latestVersionNo}`;
+      switchTab('latest');
+      document.getElementById('question-panel').scrollIntoView();
+    }
+
+    function switchTab(name) {
+      ['latest', 'versions', 'usages', 'stats', 'shares'].forEach((t) => {
+        document.getElementById('tab-' + t).hidden = t !== name;
+      });
+      if (name === 'latest') renderLatest();
+      if (name === 'versions') renderVersions();
+      if (name === 'usages') renderUsages();
+      if (name === 'stats') renderStats();
+      if (name === 'shares') renderShares();
+    }
+    document.querySelectorAll('button[data-tab]').forEach((btn) => {
+      btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+    });
+
+    function renderLatest() {
+      const d = state.question;
+      if (!d.latest) { document.getElementById('tab-latest').innerHTML = '<p class="empty">暂无版本</p>'; return; }
+      const c = d.latest.content;
+      document.getElementById('tab-latest').innerHTML = `<div class="q-head">
+        <div class="q-title"><strong>${escapeHtml(c.title)}</strong>
+          <span class="badge badge-type">${TYPE_TEXT[c.type] || c.type}</span>
+          ${c.required ? '<span class="badge badge-required">必答</span>' : ''}
+          <span class="badge">v${d.latest.versionNo}</span>
+          <span class="badge" title="统计口径">口径：${escapeHtml(d.latest.statsCaliber ? d.latest.statsCaliber.caliberLabel : '')}</span>
+        </div>
+      </div>
+      <p class="q-summary">${escapeHtml(contentSummary(c))}</p>
+      ${c.options && c.options.length ? `<div class="q-options">${c.options.map((o) => `<span class="chip">${escapeHtml(o.label)}</span>`).join('')}</div>` : ''}
+      <p class="hint">版本说明：${escapeHtml(d.latest.changeNote || '—')}</p>`;
+    }
+
+    async function renderVersions() {
+      const r = await api('/api/questions/' + state.question.id + '/versions');
+      const list = r.data || [];
+      const rows = list.map((v) => `<tr>
+        <td>v${v.versionNo}</td>
+        <td>${v.parentVersionNo === null ? '—（初始版本）' : '基于 v' + v.parentVersionNo}</td>
+        <td>${escapeHtml(v.caliberLabel || '')}</td>
+        <td>${escapeHtml(v.changeNote || '—')}</td>
+        <td>${new Date(v.createdAt).toLocaleString()}</td>
+        <td><div class="btn-group">
+          <button class="small" data-view="${v.versionNo}">查看</button>
+          ${state.question.role === 'owner' ? `<button class="secondary small" data-base="${v.versionNo}">基于此新建</button><button class="secondary small" data-restore="${v.versionNo}">恢复</button>` : ''}
+        </div></td>
+      </tr>`).join('');
+      document.getElementById('tab-versions').innerHTML = `<p class="hint">版本不可修改，只能基于某版本新建；「恢复」= 以该版本为父版本创建一条新版本记录。</p>
+        <div class="table-wrap"><table><thead><tr><th>版本</th><th>来源</th><th>统计口径</th><th>说明</th><th>创建时间</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table></div>
+        <div id="version-form-box" hidden>
+          <h3 id="version-form-title">新建版本</h3>
+          <form id="version-form">
+            <label>基于版本<select name="baseVersionNo" id="version-base"></select></label>
+            <label>题型
+              <select name="type" id="v-type">
+                <option value="single">单选</option><option value="multi">多选</option>
+                <option value="text">文本填空</option><option value="number">数字填空</option>
+              </select>
+            </label>
+            <label>题干<input name="title" id="v-title" required></label>
+            <label class="inline"><input type="checkbox" name="required" id="v-required"> 必答</label>
+            <div id="v-options-fields">
+              <label>选项（至少 2 个；保留原选项 id 请勿删除行）</label>
+              <div id="v-option-rows"></div>
+              <button type="button" id="v-add-option" class="secondary small">＋ 添加选项</button>
+            </div>
+            <div id="v-multi-fields" hidden>
+              <label class="inline">最少选择数<input type="number" name="minSelect" min="0" class="small-input"></label>
+              <label class="inline">最多选择数<input type="number" name="maxSelect" min="0" class="small-input"></label>
+            </div>
+            <div id="v-text-fields" hidden>
+              <label class="inline">最少字数<input type="number" name="minLength" min="0" class="small-input"></label>
+              <label class="inline">最多字数<input type="number" name="maxLength" min="0" class="small-input"></label>
+            </div>
+            <div id="v-number-fields" hidden>
+              <label class="inline">最小值<input type="number" name="minValue" step="any" class="small-input"></label>
+              <label class="inline">最大值<input type="number" name="maxValue" step="any" class="small-input"></label>
+              <label class="inline"><input type="checkbox" name="integerOnly"> 必须为整数</label>
+            </div>
+            <label>版本说明<input name="changeNote"></label>
+            <label class="inline"><input type="checkbox" name="caliberChanged"> 统计口径已改变（如单位/概念变化）</label>
+            <label>新口径名称<input name="caliberLabel" placeholder="口径改变时填写，如：华氏度"></label>
+            <button type="submit">创建新版本</button>
+          </form>
+          <p id="version-message"></p>
+        </div>`;
+
+      document.getElementById('version-base').innerHTML = list.map((v) => `<option value="${v.versionNo}">v${v.versionNo}${v.versionNo === state.question.latestVersionNo ? '（最新）' : ''}</option>`).join('');
+      document.getElementById('tab-versions').querySelectorAll('button[data-view]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const r = await api(`/api/questions/${state.question.id}/versions/${btn.dataset.view}`);
+          const c = r.data.content;
+          await pageAlert(`v${r.data.versionNo}（基于 ${r.data.parentVersionNo ?? '初始'}）\n题干：${c.title}\n口径：${r.data.statsCaliber.caliberLabel}\n说明：${r.data.changeNote || '—'}`);
+        });
+      });
+      document.getElementById('tab-versions').querySelectorAll('button[data-restore]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          if (!(await pageConfirm('恢复 v' + btn.dataset.restore + '？将以该版本为父版本创建一条新版本记录。'))) return;
+          const r = await api(`/api/questions/${state.question.id}/versions/${btn.dataset.restore}/restore`, {
+            method: 'POST', body: { clientToken: crypto.randomUUID() },
+          });
+          if (r.status === 201 || r.status === 200) { renderVersions(); await reloadQuestion(); }
+          else await pageAlert((r.data && r.data.error) || '恢复失败');
+        });
+      });
+      document.getElementById('tab-versions').querySelectorAll('button[data-base]').forEach((btn) => {
+        btn.addEventListener('click', () => openVersionForm(Number(btn.dataset.base)));
+      });
+      document.getElementById('v-add-option').addEventListener('click', () => addVersionOption('', ''));
+      document.getElementById('v-type').addEventListener('change', syncVersionTypeFields);
+      document.getElementById('version-form').addEventListener('submit', onVersionSubmit);
+    }
+
+    function addVersionOption(optionId, label) {
+      const box = document.getElementById('v-option-rows');
+      const row = document.createElement('div');
+      row.className = 'option-row';
+      row.dataset.optionId = optionId || '';
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'option-label';
+      input.value = label || '';
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'secondary small';
+      del.textContent = '删除';
+      del.addEventListener('click', () => row.remove());
+      row.appendChild(input); row.appendChild(del);
+      box.appendChild(row);
+    }
+
+    function syncVersionTypeFields() {
+      const type = document.getElementById('v-type').value;
+      document.getElementById('v-options-fields').hidden = !(type === 'single' || type === 'multi');
+      document.getElementById('v-multi-fields').hidden = type !== 'multi';
+      document.getElementById('v-text-fields').hidden = type !== 'text';
+      document.getElementById('v-number-fields').hidden = type !== 'number';
+    }
+
+    async function openVersionForm(baseVersionNo) {
+      const r = await api(`/api/questions/${state.question.id}/versions/${baseVersionNo}`);
+      if (r.status !== 200) { await pageAlert((r.data && r.data.error) || '读取版本失败'); return; }
+      const c = r.data.content;
+      document.getElementById('version-form-box').hidden = false;
+      document.getElementById('version-form-title').textContent = '新建版本（基于 v' + baseVersionNo + '）';
+      document.getElementById('version-base').value = String(baseVersionNo);
+      document.getElementById('v-type').value = c.type;
+      document.getElementById('v-title').value = c.title;
+      document.getElementById('v-required').checked = c.required === true;
+      document.getElementById('v-option-rows').innerHTML = '';
+      (c.options || []).forEach((o) => addVersionOption(o._id, o.label));
+      if (c.type !== 'single' && c.type !== 'multi') addVersionOption('', '');
+      document.querySelectorAll('#version-form [name=minSelect]')[0] && (document.querySelector('#version-form [name=minSelect]').value = c.minSelect ?? '');
+      document.querySelector('#version-form [name=maxSelect]') && (document.querySelector('#version-form [name=maxSelect]').value = c.maxSelect ?? '');
+      document.querySelector('#version-form [name=minLength]') && (document.querySelector('#version-form [name=minLength]').value = c.minLength ?? '');
+      document.querySelector('#version-form [name=maxLength]') && (document.querySelector('#version-form [name=maxLength]').value = c.maxLength ?? '');
+      document.querySelector('#version-form [name=minValue]') && (document.querySelector('#version-form [name=minValue]').value = c.minValue ?? '');
+      document.querySelector('#version-form [name=maxValue]') && (document.querySelector('#version-form [name=maxValue]').value = c.maxValue ?? '');
+      document.querySelector('#version-form [name=integerOnly]') && (document.querySelector('#version-form [name=integerOnly]').checked = c.integerOnly === true);
+      syncVersionTypeFields();
+      document.getElementById('version-form-box').scrollIntoView();
+    }
+
+    async function onVersionSubmit(e) {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const body = { type: fd.get('type'), title: fd.get('title'), required: fd.get('required') === 'on' };
+      const type = body.type;
+      if (type === 'single' || type === 'multi') {
+        body.options = [...document.querySelectorAll('#v-option-rows .option-row')].map((row) => ({
+          label: row.querySelector('.option-label').value.trim(),
+          ...(row.dataset.optionId ? { id: row.dataset.optionId } : {}),
+        }));
+        if (type === 'multi') {
+          body.minSelect = fd.get('minSelect') === '' ? null : Number(fd.get('minSelect'));
+          body.maxSelect = fd.get('maxSelect') === '' ? null : Number(fd.get('maxSelect'));
+        }
+      } else if (type === 'text') {
+        body.minLength = fd.get('minLength') === '' ? null : Number(fd.get('minLength'));
+        body.maxLength = fd.get('maxLength') === '' ? null : Number(fd.get('maxLength'));
+      } else if (type === 'number') {
+        body.minValue = fd.get('minValue') === '' ? null : Number(fd.get('minValue'));
+        body.maxValue = fd.get('maxValue') === '' ? null : Number(fd.get('maxValue'));
+        body.integerOnly = fd.get('integerOnly') === 'on';
+      }
+      const r = await api('/api/questions/' + state.question.id + '/versions', {
+        method: 'POST',
+        body: {
+          baseVersionNo: Number(fd.get('baseVersionNo')),
+          ...body,
+          changeNote: fd.get('changeNote'),
+          caliberChanged: fd.get('caliberChanged') === 'on',
+          caliberLabel: fd.get('caliberLabel'),
+          clientToken: crypto.randomUUID(),
+        },
+      });
+      const msg = document.getElementById('version-message');
+      if (r.status === 201 || r.status === 200) {
+        msg.textContent = '已创建 v' + r.data.versionNo;
+        await reloadQuestion();
+        renderVersions();
+      } else msg.textContent = (r.data && r.data.error) || '创建失败';
+    }
+
+    async function reloadQuestion() {
+      const r = await api('/api/questions/' + state.question.id);
+      state.question = r.data;
+      document.getElementById('question-panel-title').textContent = r.data.title;
+      document.getElementById('question-panel-meta').textContent = `题型：${TYPE_TEXT[r.data.type] || r.data.type}；最新版本 v${r.data.latestVersionNo}`;
+      document.getElementById('action-archive').hidden = r.data.status === 'archived';
+      document.getElementById('action-unarchive').hidden = r.data.status !== 'archived';
+      document.getElementById('tab-btn-shares').hidden = r.data.role !== 'owner';
+    }
+
+    async function renderUsages() {
+      const r = await api('/api/questions/' + state.question.id + '/usages');
+      const rows = (r.data || []).map((u) => `<tr>
+        <td>${u.canViewStats ? `<a href="/stats.html?id=${u.surveyId}">${escapeHtml(u.title)}</a>` : '<span class="hint">（他人的问卷）</span>'}</td>
+        <td>${STATUS_TEXT[u.effectiveStatus] || u.effectiveStatus}</td>
+        <td>v${u.sourceVersionNo}</td>
+        <td>${new Date(u.addedAt).toLocaleString()}</td>
+        <td>${u.canViewStats ? '可查看统计' : '无权限'}</td>
+      </tr>`).join('');
+      document.getElementById('tab-usages').innerHTML = `<p class="hint">该题目被以下问卷使用（他人问卷的标题与统计不可见；问卷快照固定，不受题库版本变化影响）。</p>
+        <div class="table-wrap"><table><thead><tr><th>问卷</th><th>状态</th><th>使用版本</th><th>加入时间</th><th>统计权限</th></tr></thead><tbody>${rows || '<tr><td colspan="5" class="empty">暂无问卷使用该题目</td></tr>'}</tbody></table></div>`;
+    }
+
+    async function renderStats() {
+      const r = await api('/api/questions/' + state.question.id + '/cross-stats');
+      const groups = r.data ? r.data.groups : [];
+      document.getElementById('tab-stats').innerHTML = `<p class="hint">跨问卷统计仅聚合你自己的问卷（T1）；口径相同且内容签名一致才会合并。${groups.length === 0 ? '<br>暂无你的问卷使用该题目。' : ''}</p>` +
+        groups.map((g) => {
+          const statsHtml = (() => {
+            if (g.stats.optionCounts) {
+              return `<div class="table-wrap"><table><thead><tr><th>选项</th><th>数量</th></tr></thead><tbody>${g.stats.optionCounts.map((o) => `<tr><td>${escapeHtml(o.label)}</td><td>${o.count}</td></tr>`).join('')}</tbody></table></div>`;
+            }
+            if (g.stats.number) {
+              const n = g.stats.number;
+              return `<p>作答数 ${n.count}；均值 ${n.mean === null ? '—' : n.mean.toFixed(2)}；最小 ${n.min ?? '—'}；最大 ${n.max ?? '—'}</p>`;
+            }
+            if (g.stats.contents) {
+              return `<ul>${g.stats.contents.map((c) => `<li>${escapeHtml(c.value)} <span class="hint">（${new Date(c.submittedAt).toLocaleString()}）</span></li>`).join('')}</ul>`;
+            }
+            return '';
+          })();
+          return `<div class="stat-group">
+            <h3>口径：${escapeHtml(g.caliberLabel || '—')}${g.merged ? `<span class="badge">合并 v${g.compatibleVersionNos.join('/v')}</span>` : `<span class="badge">v${g.compatibleVersionNos[0]}</span>`}</h3>
+            <p class="hint">${g.surveyCount} 份问卷；${g.totalResponses} 份答卷；该题作答 ${g.answered}；未作答 ${g.missing}（${escapeHtml(g.missingExplanation)}）</p>
+            ${statsHtml}
+            <details><summary>纳入的问卷（${g.units.length}）</summary>
+              <div class="table-wrap"><table><thead><tr><th>问卷</th><th>版本</th><th>答卷</th><th>作答</th><th>未作答</th></tr></thead><tbody>
+              ${g.units.map((u) => `<tr><td><a href="/stats.html?id=${u.surveyId}">${escapeHtml(u.title)}</a></td><td>v${u.sourceVersionNo}</td><td>${u.responseCount}</td><td>${u.answeredCount}</td><td>${u.missingCount}</td></tr>`).join('')}
+              </tbody></table></div>
+            </details>
+          </div>`;
+        }).join('');
+    }
+
+    // —— 单题共享管理（第 20 轮，仅题目所有者可见）——
+    async function renderShares() {
+      const d = state.question;
+      const rows = (d.sharedWith || []).map((item) => `<tr>
+        <td>${escapeHtml(item.username || '')}</td>
+        <td>${new Date(item.grantedAt).toLocaleString()}</td>
+        <td><button class="danger small" data-unshare="${item.userId}">取消共享</button></td>
+      </tr>`).join('');
+      document.getElementById('tab-shares').innerHTML = `<p class="hint">单题共享：被共享用户可以直接查看这道题，并把它加入自己的问卷（只读，不能修改题目）。题库整体的共享在题库列表中管理。</p>
+        <form id="share-question-form">
+          <label>共享给用户名<input name="username" required></label>
+          <button type="submit">共享</button>
+        </form>
+        <p id="share-question-message"></p>
+        <div class="table-wrap"><table><thead><tr><th>用户</th><th>共享时间</th><th>操作</th></tr></thead><tbody>${rows || '<tr><td colspan="3" class="empty">还未单独共享给任何人</td></tr>'}</tbody></table></div>`;
+      document.getElementById('share-question-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const fd = new FormData(e.target);
+        const r = await api('/api/questions/' + state.question.id + '/share', { method: 'POST', body: { username: fd.get('username') } });
+        const msg = document.getElementById('share-question-message');
+        if (r.status === 200) { msg.textContent = '已共享'; e.target.reset(); await reloadQuestion(); renderShares(); }
+        else msg.textContent = (r.data && r.data.error) || '共享失败';
+      });
+      document.querySelectorAll('#tab-shares button[data-unshare]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          if (!(await pageConfirm('确定取消对该用户的单题共享？'))) return;
+          const r = await api('/api/questions/' + state.question.id + '/share/' + btn.dataset.unshare, { method: 'DELETE' });
+          if (r.status === 200) { await reloadQuestion(); renderShares(); }
+          else await pageAlert((r.data && r.data.error) || '取消失败');
+        });
+      });
+    }
+
+    document.getElementById('action-archive').addEventListener('click', async () => {
+      if (!(await pageConfirm('归档后题目将不再出现在题库列表与"从题库添加"选择器中；已使用该题的问卷不受影响。确定归档？'))) return;
+      const r = await api('/api/questions/' + state.question.id + '/archive', { method: 'POST' });
+      if (r.status === 200) { await reloadQuestion(); await loadBankQuestions(); }
+      else await pageAlert((r.data && r.data.error) || '归档失败');
+    });
+    document.getElementById('action-unarchive').addEventListener('click', async () => {
+      const r = await api('/api/questions/' + state.question.id + '/unarchive', { method: 'POST' });
+      if (r.status === 200) { await reloadQuestion(); await loadBankQuestions(); }
+      else await pageAlert((r.data && r.data.error) || '取消失败');
+    });
+    document.getElementById('action-delete').addEventListener('click', async () => {
+      if (!(await pageConfirm('确定删除该题目？被问卷使用过的题目无法删除（建议使用归档）。'))) return;
+      const r = await api('/api/questions/' + state.question.id, { method: 'DELETE' });
+      if (r.status === 200) { await pageAlert('已删除'); document.getElementById('question-panel').hidden = true; loadBankQuestions(); }
+      else await pageAlert((r.data && r.data.error) || '删除失败');
+    });
+
+    // —— 题库创建 ——
+    document.getElementById('create-bank-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const r = await api('/api/banks', { method: 'POST', body: { name: fd.get('name'), description: fd.get('description') } });
+      const msg = document.getElementById('bank-message');
+      if (r.status === 201) { msg.textContent = '已创建题库'; e.target.reset(); loadBanks(); }
+      else msg.textContent = (r.data && r.data.error) || '创建失败';
+    });
+
+    syncTypeFields();
+    resetOptionRows();
+    loadMe();
+    loadBanks();
+  </script>
+</body>
+</html>

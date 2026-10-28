@@ -1,0 +1,143 @@
+{
+  "results": [
+    {
+      "step": "准备",
+      "ok": true,
+      "detail": "A 建题库/题目 v1/v2 完成（bank=6adee852c3f56bf6a7d4b710）"
+    },
+    {
+      "step": "准备-共享",
+      "ok": true,
+      "detail": "A 共享给 fixB（status=200）"
+    },
+    {
+      "step": "准备-A快照卷",
+      "ok": true,
+      "detail": "A 建立使用 v1 的快照卷并提交 1 份答卷（红色）"
+    },
+    {
+      "step": "1a-D3打开",
+      "ok": true,
+      "detail": "B 点击「打开」后面板标题正确（实际=\"回归题库（共享 · 只读）\"）",
+      "shot": "1a-B打开共享题库.png"
+    },
+    {
+      "step": "1b-题目列表",
+      "ok": true,
+      "detail": "B 能看到共享题库的题目列表"
+    },
+    {
+      "step": "1c-版本查看",
+      "ok": true,
+      "detail": "B 可查看 v1/v2；版本列表无「基于此新建/恢复」按钮（实际按钮数=0）",
+      "shot": "1c-B查看版本只读.png"
+    },
+    {
+      "step": "2a-界面无写入口",
+      "ok": true,
+      "detail": "B 界面隐藏新建/存入/改名/共享/删除入口（实际={\"newQuestion\":true,\"fromSurvey\":true,\"renameBtn\":false,\"shareBtn\":false,\"deleteBtn\":false}）"
+    },
+    {
+      "step": "2b-HTTP写接口拒绝",
+      "ok": true,
+      "detail": "B 直接调用 6 类写接口全部 403（实际 403,403,403,403,403,403）"
+    },
+    {
+      "step": "1d-快照v2",
+      "ok": true,
+      "detail": "B 通过界面把 v2 加入自己的草稿问卷（含黄色选项、来源标记 v2）",
+      "shot": "1d-快照已加入.png"
+    },
+    {
+      "step": "1e-填写提交",
+      "ok": true,
+      "detail": "B 填写（黄色）并提交成功"
+    },
+    {
+      "step": "1f-本人统计",
+      "ok": true,
+      "detail": "B 查看自己问卷统计：黄色=1",
+      "shot": "1f-B自己的统计.png"
+    },
+    {
+      "step": "4-B界面跨问卷统计",
+      "ok": true,
+      "detail": "B 通过界面打开跨问卷统计：含自己的问卷、不含 A 的问卷（实际片段=\"跨问卷统计仅聚合你自己的问卷（T1）；口径相同且内容签名一致才会合并。\\n            口径：默认口径v2\\n            1 份问卷；1 份答卷；该题作答 1；未作答 0（未作答 = 各卷答卷数 − 该题作答数（题目被跳过\"）",
+      "shot": "4-B跨问卷统计界面.png"
+    },
+    {
+      "step": "3a-归档",
+      "ok": true,
+      "detail": "A 归档题目"
+    },
+    {
+      "step": "3b-默认隐藏",
+      "ok": true,
+      "detail": "重新进入后默认列表不显示归档题"
+    },
+    {
+      "step": "3c-显示已归档",
+      "ok": true,
+      "detail": "勾选「显示已归档」后可见归档题并带「已归档」标识",
+      "shot": "3c-显示已归档列表.png"
+    },
+    {
+      "step": "3d-可打开详情",
+      "ok": true,
+      "detail": "归档题详情可打开，出现「取消归档」按钮"
+    },
+    {
+      "step": "3e-取消归档",
+      "ok": true,
+      "detail": "取消归档成功"
+    },
+    {
+      "step": "3f-正常列表恢复",
+      "ok": true,
+      "detail": "取消归档后题目回到正常列表",
+      "shot": "3f-取消归档后正常列表.png"
+    },
+    {
+      "step": "3g-选题入口恢复",
+      "ok": true,
+      "detail": "取消归档后「从题库添加」选择器恢复该题",
+      "shot": "3g-选题入口恢复.png"
+    },
+    {
+      "step": "3h-历史数据不变",
+      "ok": true,
+      "detail": "归档/取消归档全程：问卷快照、版本链、历史答卷统计不变（snapshot=true versions=true 红=1）"
+    },
+    {
+      "step": "5-控制台干净",
+      "ok": true,
+      "detail": "无 scrollIntoView 异常（0 条）、无 undefined.name 异常（0 条）、无未处理页面异常（0 条）、无非资源类控制台错误（0 条）；预期 401/403/404 网络日志单独记录：[\"401\",\"404\",\"403\"]"
+    },
+    {
+      "step": "终",
+      "ok": null,
+      "detail": "回归完成：1 共享完整界面流程 / 2 只读权限（界面+HTTP）/ 3 归档恢复闭环 / 4 B 界面跨问卷统计 / 5 控制台"
+    }
+  ],
+  "pageErrors": {
+    "A": [],
+    "B": []
+  },
+  "consoleErrors": {
+    "A": [
+      "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+      "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    ],
+    "B": [
+      "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+      "Failed to load resource: the server responded with a status of 404 (Not Found)",
+      "Failed to load resource: the server responded with a status of 403 (Forbidden)",
+      "Failed to load resource: the server responded with a status of 403 (Forbidden)",
+      "Failed to load resource: the server responded with a status of 403 (Forbidden)",
+      "Failed to load resource: the server responded with a status of 403 (Forbidden)",
+      "Failed to load resource: the server responded with a status of 403 (Forbidden)",
+      "Failed to load resource: the server responded with a status of 403 (Forbidden)"
+    ]
+  },
+  "at": "2026-10-26T05:42:47.218Z"
+}

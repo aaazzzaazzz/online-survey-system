@@ -121,6 +121,27 @@ th { background: #f8fafc; font-weight: 600; white-space: nowrap; }
 .badge-closed { background: var(--warn-soft); color: var(--warn); }
 .badge-expired { background: var(--danger-soft); color: var(--danger); }
 .badge-required { background: var(--danger-soft); color: var(--danger); }
+.badge-warn { background: var(--warn-soft); color: var(--warn); }
+
+/* 页内对话框（替代原生 prompt/confirm/alert：部分浏览器环境会拦截原生弹窗） */
+#dialog-overlay {
+  position: fixed; inset: 0;
+  background: rgba(15, 23, 42, .35);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 50;
+}
+#dialog-overlay[hidden] { display: none; }
+.dialog-box {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 10px 30px rgba(16, 24, 40, .25);
+  padding: 1.2rem 1.4rem;
+  width: min(420px, 90vw);
+}
+.dialog-box p { margin: 0 0 .9rem; line-height: 1.6; word-break: break-all; }
+.dialog-box input { width: 100%; margin-bottom: .9rem; }
+.dialog-box .btn-group { justify-content: flex-end; margin: 0; }
 .badge-type { background: var(--primary-soft); color: var(--primary-dark); }
 
 /* ============ 问卷列表页 ============ */

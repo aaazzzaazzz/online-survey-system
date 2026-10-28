@@ -1,4 +1,4 @@
-# 数据库设计（v0.2，含第一版业务规则落点）
+# 数据库设计（v0.3，含题库与题目版本）
 
 > 与 `docs/requirements.md` 同步维护。所有业务数据持久化于 MongoDB。
 
@@ -16,8 +16,11 @@
 | 集合 | 内容 | 关系 |
 | --- | --- | --- |
 | `users` | 用户账号 | — |
-| `surveys` | 问卷（题目嵌入） | `ownerId` → users |
+| `surveys` | 问卷（题目嵌入，含题库来源字段） | `ownerId` → users；`questions[].sourceQuestionId` → questions |
 | `responses` | 答卷（独立存储） | `surveyId` → surveys；`respondentId` → users（可空） |
+| `question_banks` | 题库（共享与组织单元，第 14 轮新增） | `ownerId` → users；`sharedWith[].userId` → users |
+| `questions` | 逻辑题目主记录（稳定身份，不含内容，第 14 轮新增） | `bankId` → question_banks；`ownerId` → users |
+| `question_versions` | 题目版本（不可变内容唯一载体，第 14 轮新增） | `questionId` → questions；`parentVersionNo` 自引用演化链 |
 
 ## 3. users
 
@@ -61,9 +64,16 @@
   minValue: number | null,    // number：最小值
   maxValue: number | null,    // number：最大值
   integerOnly: bool,          // number：是否必须为整数
-  jumps: JumpRule[]           // 按数组顺序求值，首条命中即跳转（Q3 已确认）
+  jumps: JumpRule[],          // 按数组顺序求值，首条命中即跳转（Q3 已确认）
+  // —— 以下为"从题库添加"时写入的来源字段（第 14 轮，仅快照题目存在；旧题目无这些字段）——
+  sourceQuestionId: ObjectId, // 来源逻辑题目 questions._id（复用追溯与使用关系）
+  sourceVersionNo: int,       // 使用的具体版本号（快照即固定，之后题库更新不影响本题）
+  sourceCaliberKey: ObjectId, // 快照时刻的统计口径标识（跨问卷统计分组以快照为准）
+  addedAt: Date,              // 使用关系创建时间
 }
 ```
+
+旧数据兼容：第 14 轮前的问卷题目没有来源字段，视为"独立题目"（不属于任何题库），无任何迁移；历史答卷含义不变（answers.questionId / optionId 引用均未变）。
 
 ### JumpRule 子文档
 
@@ -111,7 +121,58 @@
 }
 ```
 
-## 6. 嵌入与引用的选择及理由
+## 6. 题库与题目版本（第 14 轮新增，只增不改现有集合）
+
+### question_banks（题库：共享与组织单元）
+
+| 字段 | 类型 | 约束 / 说明 |
+| --- | --- | --- |
+| `_id` | ObjectId | 主键 |
+| `ownerId` | ObjectId | 所有者（引用 users） |
+| `name` | string | 必填，1–50 字符 |
+| `description` | string | 可空 |
+| `sharedWith` | [{userId: ObjectId, canEdit: bool, grantedAt: Date}] | 共享授权（T4 已确认：首期只读，canEdit 恒 false，字段为未来 editor 角色预留） |
+| `scope` | string | `personal`（预留未来 `team` + teamId 扩展团队题库） |
+| `createdAt` / `updatedAt` | Date | — |
+
+个人题库 = 自己创建的 banks；共享题库 = `sharedWith` 含自己的他人 banks。
+
+### questions（逻辑题目主记录：稳定身份，不含内容）
+
+| 字段 | 类型 | 约束 / 说明 |
+| --- | --- | --- |
+| `_id` | ObjectId | 逻辑题目稳定 ID（跨问卷复用、使用关系、跨问卷统计都靠它） |
+| `ownerId` | ObjectId | 所有者（= 所属题库所有者） |
+| `bankId` | ObjectId | 所属题库（一道题只属于一个题库） |
+| `type` / `title` | string | 冗余最新版本信息，列表展示用（新版本创建时随 `$set` 更新） |
+| `latestVersionNo` | int | 最新版本号（仅展示；`$max` 更新 + 读取自愈，不参与分配） |
+| `versionCount` | int | 版本分配计数器：新版本号 = `$inc` 返回值（原子、并发互异；失败不回退，空缺号不回收） |
+| `status` | string | `active` / `archived`（归档仅从列表与选择器隐藏，不影响已使用问卷） |
+| `sharedWith` | [{userId: ObjectId, grantedAt: Date}] | 单题共享（第 20 轮）：题库授权与单题授权任一即可只读复用；取消题库共享不影响单题授权，反之亦然 |
+| `createdAt` / `updatedAt` | Date | — |
+
+### question_versions（不可变版本：内容唯一载体）
+
+| 字段 | 类型 | 约束 / 说明 |
+| --- | --- | --- |
+| `_id` | ObjectId | 主键 |
+| `questionId` | ObjectId | 归属逻辑题目 |
+| `versionNo` | int | 1 起递增；`{questionId, versionNo}` unique；允许空缺、永不回收（问卷引用必须永远可查） |
+| `parentVersionNo` | int \| null | 基于哪个版本创建（v1 为 null）；恢复历史版本 = 以被恢复版本为 parent 新建记录 |
+| `content` | Question 内容（不含 `_id` / `jumps`） | 题目完整内容快照：type/title/required/options（选项 id 跨版本稳定：编辑沿用旧 id、新增生成新 id）/各题型约束。**插入后不可变：无更新/删除接口**。jumps 是问卷局部结构，不入题库（快照进问卷时清空，T3） |
+| `statsCaliber` | {caliberKey: ObjectId, caliberLabel: string} | 显式统计口径声明：新建版本默认继承父版本；`caliberChanged` 时生成新 key。覆盖机器无法判断的语义变化（单位/概念改变） |
+| `clientToken` | string \| 无 | 可选幂等键：partial unique `{questionId, clientToken}`，重试不会重复建版本 |
+| `changeNote` / `createdBy` / `createdAt` | — | 版本说明 / 创建者 / 创建时间 |
+
+### 使用关系（无独立集合）
+
+使用关系由 `surveys.questions.sourceQuestionId` 多键索引**派生查询**（`GET /api/questions/:id/usages`）：不冗余一份"使用表"，问卷删除/状态变化自动反映；`addedAt` 即使用关系创建时间。被任何问卷使用的逻辑题目禁止删除（409，T5；日常操作优先归档）。
+
+### 跨问卷统计口径（T1 已确认：仅聚合请求者本人的问卷）
+
+分组键 = 快照 `sourceCaliberKey` + 快照内容签名（type + 有序选项 label + 各题型约束；不含 title/required/jumps/选项 id）。合并必须口径与签名**同时**相同：显式口径只能拆组（单位/概念改变），不能强行合并；内容变化（label、选项顺序、约束、题型）必然拆组。数字合并为跨卷原始答案聚合（均值 = 总和/总数），多选/单选按 label 对齐相加。
+
+## 7. 嵌入与引用的选择及理由
 
 1. **问卷 ↔ 题目：嵌入。** 题目与问卷是组合关系：题目只属于一份问卷；编辑、填写、校验、跳转解析总是整卷一起读；无跨问卷复用需求。嵌入后一次查询得到完整问卷，无需组装。若拆成独立 questions 集合，每次读取都要按问卷取题、排序、拼装，纯增复杂度、无收益。
 2. **问卷 ↔ 答卷：引用 surveyId。** 两者生命周期与增长速率不同：答卷数量随时间无上限增长，若嵌入问卷文档将触碰 16MB 文档上限，且"编辑问卷"与"写入答卷"会互相竞争同一文档；独立集合可并行写入、按 surveyId 聚合统计。
@@ -119,33 +180,39 @@
 
 这种组织贴合 MongoDB 的文档模型：把"一次操作要一起读的聚合"放进一个文档（问卷 + 题目），把"独立增长、独立访问路径"的实体分开（用户、答卷），而不是把关系表结构原样搬成集合。
 
-## 7. 冗余及其用途
+## 8. 冗余及其用途
 
 - **repeatAllowed 冗余（B1 已修复）**：答卷在提交时拷贝问卷的 allowRepeat 配置。用途：partial unique index 无法引用 surveys 文档，跨文档唯一性条件必须冗余到答卷自身；同时把约束锁定为"提交时刻的配置"。匿名答卷（respondentId 为 null）不受影响。
 - **答案快照：本轮不存储。** Q5 已确认发布后锁定题目结构，题目/选项在发布后不可变，答卷中的 questionId/optionId 可通过问卷文档稳定解读，无需快照。若未来放宽 Q5（发布后可改结构），再补快照字段。
 - **不做统计缓存**：统计直接聚合 responses，保证"基于真实答卷"且无一致性问题；量级增大后再考虑预聚合（后续迭代）。
 
-## 8. 索引
+## 9. 索引
 
 | 集合 | 索引 | 用途 |
 | --- | --- | --- |
 | users | `{username: 1}` unique | 注册 / 登录唯一性 |
 | surveys | `{ownerId: 1, updatedAt: -1}` | 我的问卷列表 |
 | surveys | `{status: 1, deadline: 1}` | 截止扫描（如需要） |
+| surveys | `{'questions.sourceQuestionId': 1}`（multikey，第 14 轮） | 题目使用关系派生查询 / 删除前引用检查 / 跨问卷统计入口 |
 | responses | `{surveyId: 1, submittedAt: 1}` | 统计范围扫描与分页 |
 | responses | `{surveyId: 1, respondentId: 1}` | 应用层重复填写判重查询 |
 | responses | `{surveyId: 1, respondentId: 1}` **unique**，partialFilterExpression `{respondentId: {$type: 'objectId'}, repeatAllowed: false}`，名称 `unique_respondent_per_survey_when_no_repeat` | **B1**：不允许重复填写的数据库层兜底；匿名与允许重复的答卷不受限 |
+| question_banks | `{ownerId: 1, updatedAt: -1}`；`{'sharedWith.userId': 1}` | 我的题库列表；共享给我的题库列表 |
+| questions | `{bankId: 1, updatedAt: -1}`；`{ownerId: 1}`；`{'sharedWith.userId': 1}` | 题库内题目列表；按所有者查询；共享给我的题目列表（第 20 轮） |
+| question_versions | `{questionId: 1, versionNo: 1}` **unique** | 版本号唯一（$inc 分配 + 索引兜底）；按版本读取 |
+| question_versions | `{questionId: 1, parentVersionNo: 1}` | 版本演化关系 / 分支查询 |
+| question_versions | `{questionId: 1, clientToken: 1}` **unique**，partialFilterExpression `{clientToken: {$exists: true}}`，名称 `unique_client_token_per_question` | 幂等重试：同 token 只建一个版本 |
 
 说明：重复填写双重保障——应用层在提交时判重并返回明确业务错误（409）；数据库层由 partial unique index + 答卷冗余的 repeatAllowed 兜底并发竞态（B1 已修复，唯一索引冲突 11000 在 `services/submit.js` 中转为 409，不向客户端泄露数据库异常）。索引在 `server/src/db.js` 中集中创建，与本表保持一致。
 
-## 9. 约束与校验分层
+## 10. 约束与校验分层
 
 - 结构约束（标题必填、选项 ≥ 2、label 非空、跳转目标存在且向后（Q4）等）在应用层统一校验（`server/src/validation.js`），保存问卷时执行。
 - 答案校验（必答、选项有效、多选数量、字数、数字范围 / 整数）在提交时按题型执行（`services/validate-answers.js`），以提交时刻的问卷配置为准。
 - MongoDB 不重复定义这些校验（避免校验逻辑两处维护）；MongoDB 只承担唯一索引等数据层约束。
 - 数字以 JS Number（double）存储；integerOnly 时先校验整数。
 
-## 10. 已确认落点与遗留说明
+## 11. 已确认落点与遗留说明
 
 - Q1：`responses.respondentId` 在 allowAnonymous=true 时为 null；填写一律需登录（fill 路由全部要求会话）。
 - Q2/Q3/Q4/Q8：JumpRule 结构已定稿；结构校验已在 `validation.js` 实现（数据层），跳转编辑界面与运行解析在后续阶段实现。

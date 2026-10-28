@@ -26,6 +26,8 @@ app.use('/api/auth', require('./routes/auth'));
 app.use('/api/surveys', require('./routes/surveys'));
 app.use('/api/fill', require('./routes/fill'));
 app.use('/api/stats', require('./routes/stats'));
+app.use('/api/banks', require('./routes/banks'));
+app.use('/api/questions', require('./routes/questions'));
 
 // 静态前端
 app.use(express.static(path.join(__dirname, '..', '..', 'public')));

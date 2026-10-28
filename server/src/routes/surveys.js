@@ -5,6 +5,7 @@ const { getDb } = require('../db');
 const { requireAuth } = require('../auth');
 const { validateSurveyInput, buildQuestion, validateSurveyStructure } = require('../validation');
 const { effectiveStatus } = require('../services/lifecycle');
+const { getBankAccess } = require('../services/bank-access');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -37,6 +38,9 @@ function toPublic(survey) {
       type: q.type,
       title: q.title,
       required: q.required,
+      sourceQuestionId: q.sourceQuestionId ? q.sourceQuestionId.toHexString() : null,
+      sourceVersionNo: q.sourceVersionNo ?? null,
+      addedAt: q.addedAt ?? null,
       options: (q.options || []).map((o) => ({ id: o._id.toHexString(), label: o.label })),
       minSelect: q.minSelect ?? null,
       maxSelect: q.maxSelect ?? null,
@@ -183,6 +187,56 @@ router.post('/:id/questions', async (req, res, next) => {
         { $set: { questions, updatedAt: new Date() } },
       );
       if (result.modifiedCount === 1) return res.status(201).json({ id: question._id.toHexString() });
+    }
+    res.status(409).json({ error: '操作冲突（并发修改），请重试' });
+  } catch (err) { next(err); }
+});
+
+// 从题库添加题目（第 13 轮）：把指定版本的完整内容快照进问卷（jumps 清空，T3：
+// 跳转目标是问卷局部结构，需在问卷内重新配置）；记录来源题目/版本/口径/加入时间。
+// 快照后与题库再无关联：题库新版本、归档、撤销共享都不影响已添加的快照。
+// 仅草稿可加（Q5）；结构与并发处理与手动添加题目一致（读取 → 整卷校验 → updatedAt 守卫）。
+router.post('/:id/questions/from-bank', async (req, res, next) => {
+  try {
+    const ownerId = new ObjectId(req.session.userId);
+    const body = req.body || {};
+    const questionId = parseId(body.bankQuestionId);
+    const question = questionId && await getDb().collection('questions').findOne({ _id: questionId });
+    if (!question) return res.status(404).json({ error: '题目不存在或无权访问' });
+    const bank = await getDb().collection('question_banks').findOne({ _id: question.bankId });
+    // 权限：题库授权或单题授权（第 20 轮）任一即可复用
+    const bankAccess = getBankAccess(bank, req.session.userId);
+    const sharedToMe = (question.sharedWith || []).some((s) => s.userId.toHexString() === req.session.userId);
+    if (bankAccess === 'none' && !sharedToMe) {
+      return res.status(404).json({ error: '题目不存在或无权访问' });
+    }
+    const versionNo = body.versionNo === undefined || body.versionNo === null ? question.latestVersionNo : Number(body.versionNo);
+    const version = await getDb().collection('question_versions').findOne({ questionId: question._id, versionNo });
+    if (!version) return res.status(404).json({ error: '版本不存在' });
+    // 快照：新题目 id（问卷内唯一）；选项 id 原样保留（跨问卷统计按 label 对齐的根基）
+    const snapshot = {
+      _id: new ObjectId(),
+      ...version.content,
+      jumps: [],
+      sourceQuestionId: question._id,
+      sourceVersionNo: version.versionNo,
+      sourceCaliberKey: version.statsCaliber.caliberKey,
+      addedAt: new Date(),
+    };
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const survey = await getDb().collection('surveys').findOne({ _id: parseId(req.params.id), ownerId });
+      if (!survey) return res.status(404).json({ error: '问卷不存在或无权访问' });
+      if (survey.status !== 'draft') return res.status(409).json({ error: '问卷已发布，题目结构已锁定（Q5）' });
+      const questions = [...survey.questions, snapshot];
+      const structureErrors = validateSurveyStructure({ ...survey, questions });
+      if (structureErrors.length) {
+        return res.status(400).json({ error: structureErrors.map((e) => e.message).join('；') });
+      }
+      const result = await getDb().collection('surveys').updateOne(
+        { _id: survey._id, updatedAt: survey.updatedAt },
+        { $set: { questions, updatedAt: new Date() } },
+      );
+      if (result.modifiedCount === 1) return res.status(201).json({ id: snapshot._id.toHexString() });
     }
     res.status(409).json({ error: '操作冲突（并发修改），请重试' });
   } catch (err) { next(err); }

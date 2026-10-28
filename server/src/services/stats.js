@@ -1,4 +1,4 @@
-// 统计口径：直接聚合 responses（docs/database.md §7：不做统计缓存），
+// 统计口径：直接聚合 responses（docs/database.md §8：不做统计缓存），
 // 各题型统计由题型注册表提供实现。
 const { getDb } = require('../db');
 const { QUESTION_TYPES } = require('./question-types');

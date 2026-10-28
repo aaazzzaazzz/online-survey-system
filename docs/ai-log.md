@@ -181,3 +181,158 @@ Result：
 得到：填写页路由由 `/fill/:id` 改为 `/survey/:id`（`app.js`）；`surveys.html`/`survey.html` 中分享链接生成与复制地址同步改为 `/survey/`；`docs/api.md` 页面清单、`docs/database.md` §4、`docs/runbook.md` 验收步骤同步更新。API 路径（/api/fill/…）保持不变（对外可见的分享链接即页面路径）。实际验证：npm test **71/71 通过**；API 层实测新链接 `/survey/<id>` → 200（text/html），旧链接 `/fill/<id>` → 404（弃用）；真实浏览器实测管理页"填写链接"显示 `http://localhost:3000/survey/<问卷id>` 且打开后填写页正常。
 
 修改：按照result中所列逐一修改，并未修改其他内容。
+
+---
+
+### 第 14 轮 · 2026-10-26 · 题库管理、题目复用、共享、版本管理、使用关系与跨问卷统计（第二阶段扩展）
+
+工具：Read / Grep / Bash（mongod 启动、mongosh 只读检查正式库、npm test、临时库 E2E curl 冒烟）、Edit / Write（后端服务与路由、6 个新测试文件、banks.html、survey.html、docs 与 README、回滚脚本）
+
+Prompt：
+1. 设计需求全文（"我需要在现有问卷系统基础上，增加题库管理、题目复用、题目共享、版本管理、使用关系查询和跨问卷统计功能。请先检查当前项目的实际代码和 MongoDB 数据结构，设计完整的实现方案。本轮只进行分析与设计，不修改任何代码、数据库、测试、文档或现有数据。完成后等待我确认。"）——要求比较方案 A/B、给出集合设计、兼容现有数据、API/前端/测试计划，区分现有/新增/待确认。
+2. 修订要求（"总体接受 B′ 混合方案……正式实施前，请先修正并明确以下设计细节：1. 跨问卷统计兼容性……2. 版本号与并发……3. 历史版本与删除……4. 确认以下默认决策 T1–T7……"）。
+3. 实施授权（"请先补充这些设计和对应测试要求，再按照既定实施顺序开发。实施期间不得清空或重建正式数据库，不得修改或删除现有问卷和答卷。所有新功能优先在独立测试数据库验证；涉及正式数据的迁移或写操作前，必须先说明具体操作并等待我确认。完成后按阶段汇报修改文件、实际测试结果、数据库变化和遗留问题。"）。
+
+设计决策（两轮分析稿已获用户确认）：
+- 数据模型 B′：新增 question_banks / questions / question_versions 三个集合；问卷保留题目完整快照 + 来源字段（sourceQuestionId / sourceVersionNo / sourceCaliberKey / addedAt）；使用关系由 surveys 多键索引派生，不建 question_usages。
+- 兼容性：显式口径声明（statsCaliber：caliberKey/caliberLabel，版本默认继承、可声明变更）+ 服务端内容签名（type + 有序选项 label + 各题型约束；不含 title/required/jumps/选项 id）；合并必须两者同时成立，声明只能拆组不能强行合并；分组判定以问卷快照为准。
+- 版本并发：versionCount $inc 原子分配 + {questionId, versionNo} 唯一索引；插入失败不回退计数器（空缺不复用）；clientToken partial unique 索引幂等重试；latestVersionNo $max 更新 + 读取自愈。
+- T1–T7 全部按用户确认的默认值实现（跨问卷统计仅本人问卷；他人问卷标题隐藏；快照清空跳转；首期只读共享；被使用题目删除 409；手动建库；数字统计 count/mean/min/max）。
+
+生成/修改的文件：
+- 新增：`server/src/services/bank-access.js`（权限判定）、`server/src/services/question-versions.js`（题目/版本/恢复/删除/使用关系/自愈）、`server/src/services/question-stats.js`（签名与跨问卷统计）、`server/src/routes/banks.js`、`server/src/routes/questions.js`、`public/banks.html`（题库管理页）、`scripts/rollback-question-bank.js`、6 个测试文件（`test/banks.test.js`、`test/question-versions.test.js`、`test/question-reuse.test.js`、`test/question-usages.test.js`、`test/cross-stats.test.js`、`test/migration.test.js`）。
+- 修改：`server/src/db.js`（新集合与索引）、`server/src/app.js`（挂载新路由）、`server/src/routes/surveys.js`（from-bank 快照端点、公开结构透出来源字段）、`public/survey.html`（从题库添加入口与选择器、来源标记）、`public/surveys.html`（题库入口）、`.gitignore`、`README.md`、`docs/database.md`、`docs/api.md`、`docs/runbook.md`、`docs/testing.md`、`docs/requirements.md`。
+- 未动：users/surveys/responses 集合结构与全部现有索引（只追加新集合/索引）；现有 8 个测试文件零修改。
+
+再次修改：
+1. 服务端 bug：`validateQuestionContent` 传入的 base content 无 `_id`，buildQuestion 内部结构校验 `q._id.toHexString()` 抛 TypeError → 500。修复：传入时补临时 `_id`。
+2. 服务端 bug：`restoreVersion` 用 `JSON.parse(JSON.stringify(content))` 深拷贝，ObjectId 被序列化成字符串，导致基于恢复版本建新版本时 `o._id.toHexString` 崩溃、快照选项 id 类型错误。修复：改为 `cloneContent`（选项 `_id` 重建为 ObjectId）。
+3. 测试代码问题：HTTP 响应中 ObjectId 已是 hex 字符串，测试内多处 `.toHexString()` 断言改为字符串比较；"选项 id 复用"用例需显式 `baseVersionNo: 1`（默认基于最新版）；clientToken 计数断言改为按 `{questionId, clientToken}` 计数（主记录 title 会被版本创建更新，按标题查询不成立）；"权限"用例的题目建到了旧题库，共享错库；统计测试问卷需 `allowRepeat: true`（同卷多份答卷）；跨问卷分组数 5 → 4。
+4. 测试基建：测试内直连 MongoClient 未关闭导致 node:test 进程不退出（首跑 300s 超时挂起），改为复用客户端并在 after() 关闭。
+
+验证结果（实际运行）：
+- `npm test`：**115/115 通过**（旧 71 + 新 44），MongoDB 真实本地测试库 `survey_system_test`。
+- 独立临时库 E2E 冒烟（survey_system_e2e，完成后已删除）：注册 → 建库 → 建数字题 v1 → 建 v2（声明新口径"岁"）→ 建问卷 → 从题库添加 v2 → 发布 → 提交 25/35 两份答卷 → 使用关系返回来源信息（本人问卷标题可见）→ 跨问卷统计 `{count:2, mean:30, min:25, max:35}`（加权正确）→ 恢复 v1 生成 v3（parent=1、口径继承"默认口径"、说明"恢复自 v1"）→ 三个前端页面均 200。
+- 兼容性验证：旧结构问卷（无来源字段）填写/提交/统计行为不变；删除三个新集合（回滚模拟）后现有功能与快照问卷照常（migration.test.js）。
+- 正式数据库 survey_system：仅做过只读检查（集合与索引现状），**未做任何写入、清空或重建**；新集合/索引只会在下次正式启动服务时由 ensureIndexes 幂等创建（additive，不影响现有数据）。
+
+---
+
+### 第 15 轮 · 2026-10-26 · 题库功能最终独立验收（真实浏览器 + 只读核查 + 全量测试）
+
+工具：Read / Grep / Bash（mongod 启动、mongosh 只读检查、npm test、curl）、Write / Edit（`.tmp-verify/acceptance.js` 验收脚本）、puppeteer-core 驱动本机真实 Edge（headless，独立验收库 `survey_system_accept`，未触正式库）
+
+Prompt（用户本轮验收指令原文位置：本会话，共 8 条要求）：真实浏览器按 runbook §4 九步验收并记录步骤/结果/截图；发现缺陷先停止修改、汇报复现/影响/建议并等待确认；核查索引创建逻辑不删不重建不丢数据；检查版本失败/latestVersionNo 自愈/归档/撤销共享/删除/统计权限边界；运行完整 npm test 记录实际结果；只读对比正式库集合/索引/文档计数；核查五份文档一致性；不得虚报未执行的测试、不得把 HTTP 冒烟当浏览器验收。
+
+实际执行与结果：
+- 正式库只读基线（验收前后各一次，结果完全一致）：users 51 / surveys 53 / responses 21 / sessions 1；索引与最早文档 _id（答卷 6ad1968a5e0d783b3f42d170、问卷 6ad1968a5e0d783b3f42d16b、用户 6ad1968a5e0d783b3f42d169）均未变化；question_banks/questions/question_versions 三个集合始终不存在于正式库。
+- 索引创建逻辑核查（独立库 survey_system_idxcheck）：预置旧结构 users/surveys/responses 各 1 条 → 以新代码启动服务两次 → 两次启动后文档数、答卷内容（questionId/value）、问卷题目数均不变，仅追加新索引（surveys 多键索引等）；ensureIndexes 全部为幂等 createIndex，无 drop/delete/清空（db.js 代码复核 + 实测双重确认）。
+- 真实浏览器验收（runbook §4）：步骤 1–8 共 18 项通过（注册登录与题库入口、建库、建题 v1、基于 v1 建 v2/口径声明 v3/恢复 v1 生成 v4 且链路正确、共享后 B 可见且 B 全部写操作 403、从题库选 v2 快照进问卷（来源标记/选项 id）、建 v5+撤销共享后快照逐项不变、B 填写提交、问卷统计蓝色 1、使用关系（本人标题可见+版本）、跨问卷统计（本人聚合正确/B 看不到 A 的/匿名无身份字段由自动化覆盖）、归档隐藏+选择器过滤、未使用题目删除成功、被使用题目删除 409、非空题库删除 409）；第 9 步回滚脚本按用户指示未运行（等价场景由 migration.test.js 自动化覆盖）。
+- 自动化：`npm test` **115/115 通过**（16.5 秒）。
+- 文档一致性：api.md 端点与 routes/banks.js、questions.js、surveys.js 逐一核对一致（本轮仅修正 api.md 头注日期与权限描述）；database.md 索引表与 db.js 一致；testing.md 已补充本轮运行记录；runbook §4 与验收脚本一一对应。
+
+我在验收发现的产品缺陷：
+- D1（中）：归档题目离开详情页后，题库列表隐藏归档题且无筛选/入口，界面无法取消归档（API POST /unarchive 可用）。复现：题库 → 题目详情 → 归档 → 离开页面 → 返回 → 列表无该题、无法再打开。影响：归档近似单向，误归档后用户无法自行恢复。建议：列表增加「显示已归档」开关或将归档题置灰显示并保留「取消归档」按钮。
+- D2（低）：banks.html openBank 末尾 `bank.scrollIntoView()` 报 TypeError（bank 是数据对象而非 DOM 元素），打开题库后面板不滚动且控制台报错；功能本身可用。建议：改为 `document.getElementById('bank-panel').scrollIntoView()`。
+- D3（高）：共享题库「打开」按钮失效——bankHtml 渲染 sharedWithMe 行时 data-kind="shared"，而 bindBankActions 用 `state.banks['shared']` 查找（实际键名为 sharedWithMe）→ bank 为 undefined → openBank 抛 `Cannot read properties of undefined (reading 'name')`。影响：共享给我的题库无法通过界面打开（标题不更新、题目列表不加载）；B 的只读界面验证（5b）与跨问卷统计界面路径（7e）因此受阻，改为真实 HTTP 验证（403×4 通过；groups=0 通过）。建议：data-kind 使用实际键名，或查找时做 shared→sharedWithMe 映射。
+
+验收脚本自身的修正（非产品缺陷，全部发生在 `.tmp-verify/acceptance.js`）：共享前先注册 B；同一浏览器多页签触发 Edge headless 后台标签 JS 节流导致 click 卡死 → 改为 A/B 各用独立浏览器；waitForFunction 在部分场景失效 → 改 Node 侧轮询 evaluate；alert 消息不进 DOM → 改为监听 dialog 事件断言；"提交成功/已删除"曾误匹配页面脚本源码 → 改为等待真实消息元素/dialog；版本选择器异步重建覆盖选择 → 轮询确认生效；题目主记录标题随最新版本变化 → 按题目 id 定位。
+
+证据：`.tmp-verify/acceptance/` 下 18 张步骤截图与 `acceptance-results.json`；正式库前后对比输出见本会话。
+
+---
+
+### 第 16 轮 · 2026-10-26 · 修复第 15 轮验收缺陷 D3/D1/D2 并回归复测
+
+工具：Read / Grep / Bash（mongod、mongosh 只读检查、npm test）、Edit（banks.html、style.css、runbook.md、testing.md）、Write（`.tmp-verify/acceptance-fix/fix-regression.js` 浏览器回归脚本）、puppeteer-core 驱动本机真实 Edge（headless，独立验收库 survey_system_accept，未触正式库）
+
+Prompt（用户本轮指令原文位置：本会话，共八条要求）：确认修复 D3/D1/D2；先复现再最小修改；优先顺序 D3→D1→D2；逐项列出验收标准（共享打开/只读边界、归档开关方案、scrollIntoView 修复、真实浏览器回归四条流程、自动化测试、数据边界、文档与 ai-log、最终汇报格式）；不增加无关功能、不修改报告、不提交 Git。
+
+修复内容（Claude 按用户确认的方案执行）：
+- D3（共享题库「打开」失效）：根因 `public/banks.html` bankHtml 渲染共享行时 `data-kind="shared"`，而 bindBankActions 用 `state.banks[row.dataset.kind]` 查找（state 键名为 sharedWithMe）。修复：`bankHtml('shared')` → `bankHtml('sharedWithMe')`（一行）。修复后 B 打开共享题库正常（面板标题「回归题库（共享 · 只读）」、题目列表与版本可见；写入口隐藏；6 类写接口仍 403）。
+- D1（归档题无恢复入口）：根因 loadBankQuestions 固定过滤 archived。修复：题库面板题目列表标题旁增加「显示已归档」复选框（默认关）；开启后显示归档题并带「已归档」徽标（style.css 新增 .badge-warn），可打开详情并「取消归档」；空列表提示引导勾选开关。列表接口无变化（原接口本就返回全部题目，默认行为与权限不变，api.md 无需更新）；选题入口仍只列 active（归档题不能加入新问卷）。
+- D2（scrollIntoView 调数据对象）：根因 openBank 末尾对数据对象 bank 调用 scrollIntoView。修复：改为 `document.getElementById('bank-panel').scrollIntoView({behavior:'smooth'})` 并判空（面板是静态 DOM，不存在时不产生异常）。
+
+回归验证（真实浏览器，独立验收库，`.tmp-verify/acceptance-fix/`）：
+- `fix-regression.js` **21/21 通过**：1a–1c 共享题库界面打开/题目列表/版本查看且无写按钮；2a 界面写入口隐藏、2b 六类写接口 403（HTTP 权限验证与界面验证分开记录）；1d–1f B 从题库选 v2→发布→填写→提交→本人统计（黄色=1）；4 B 通过界面打开跨问卷统计（含自己的问卷、不含 A 的问卷，此前被 D3 阻断的路径）；3a–3h 归档→离开→刷新→显示已归档→打开→取消归档→正常列表与选题入口恢复，且问卷快照、版本链、历史答卷统计全程不变；5 控制台无 scrollIntoView（0 条）/undefined.name（0 条）/未处理异常（0 条），预期 401/403/404 网络日志单独记录。截图与 results.json 存于 `.tmp-verify/acceptance-fix/`（第 15 轮原始证据 `.tmp-verify/acceptance/` 未覆盖）。
+- 自动化：`npm test` **115/115 通过**（17.2 秒，与修复前一致，未删除/放宽任何断言）。
+- 正式库：修复轮前后只读检查一致（users 51 / surveys 53 / responses 21 / sessions 1；索引不变；最早答卷 _id 6ad1968a5e0d783b3f42d170），本轮未启动任何连接正式库的服务、未写入。
+- 文档：runbook.md 步骤 8 补充「显示已归档」恢复入口；testing.md 补充第 16 轮回归与复跑记录；api.md 无接口变化未改；ai-log 追加本记录（第 15 轮原始验收记录保留未改）。
+- 本轮未提交 Git、未修改 Word 报告、未运行回滚脚本。
+
+---
+
+### 第 17 轮 · 2026-10-26 · 验收证据归档、正式库备份与新版本本地启用
+
+工具：Bash（git status/diff、cp/mkdir、mongod 重启、curl 页面检查、mongosh 只读核对、npm start）、Write（证据目录 README.md、backup-db.js）、Edit（无——本轮未改业务代码）
+
+Prompt（用户本轮指令原文位置：本会话，共六条要求）：保留工作成果（不动 docx、不 reset/clean）；归档验收证据到 docs/evidence/question-bank/（区分修复前后、含脚本与运行说明、不含 node_modules、脱敏说明、不删 .tmp-verify）；备份 survey_system（记录命令/范围/位置/结果，不覆盖旧备份，不宣称未经测试的恢复能力）；检查初始化代码后允许在正式库启动新版本并追加新集合/索引（禁止清空/重建/删索引/批量重写/演示数据，先查端口与进程）；启用后只读检查页面与数据；如实追加 ai-log 并按要求汇报。
+
+实际执行与结果：
+- 工作区确认：本轮未修改任何业务文件；git status 与第 15/16 轮一致；未执行 reset/clean；docx 未触碰。
+- 证据归档：`docs/evidence/question-bank/`（before-fix：第 15 轮 acceptance.js + acceptance-results.json + 21 张截图，失败记录原样保留；after-fix：第 16 轮 fix-regression.js + results.json + 9 张截图）+ README.md（目录说明、重跑步骤、依赖、脱敏说明：脚本内账号/密码均为本地独立验收库测试凭据，无真实凭据/会话/令牌）。JSON 均已解析校验；`.tmp-verify` 原目录未删除。
+- 正式库备份：mongodump 未安装（本机 MongoDB 8.x 不带 database tools），改用与项目同栈的官方 mongodb 驱动 + EJSON 全量导出（脚本 `.tmp-verify/backup-db.js`，连接 mongodb://127.0.0.1:27017 本地无凭据）。**实际结果**：备份完成于 `D:\MongoDB\backups\survey_system-2026-10-26T08-01-24\`（responses 21 / sessions 1 / surveys 53 / users 51，每集合一个 .ejson + manifest.json，时间戳目录不覆盖旧备份）。恢复方式记录于脚本注释（EJSON.parse 逐行 + insertMany），**未做恢复测试，不宣称已验证可恢复**。
+- 启用前核查：db.js 初始化仅有 12 个幂等 createIndex（无 drop/delete/update/insert）；app.js 无数据库写；端口 3000 无本地监听进程（无需停止旧服务）；未更换 MongoDB 数据目录。
+- 新版本启用：`cd server && npm start`（正式库 survey_system，端口 3000），后台运行中。
+- 启用后检查：页面 `/`（302→login）、login/surveys/survey/banks/style/api 全部 200；只读核对：users 51 / surveys 53 / responses 21 与备份/基线一致，sessions 1（TTL 基础设施，与业务数据无关）；最早问卷「E2E 验收问卷 20457651」、最早用户 e2e_a20457651、最新答卷 2026-10-17 15:45 均在；新增空集合 question_banks（3 索引）/ questions（3 索引）/ question_versions（4 索引）与 surveys 多键索引已创建；原有索引未被删除（users 2、responses 4 含 partial unique）；未在正式库创建任何测试数据。
+- 未完成/未验证：备份未做恢复测试（如实声明）；本轮未运行回滚脚本、未提交 Git、未修改 Word 报告。
+
+---
+
+### 第 18 轮 · 2026-10-26 · 验收脚本独立可复现 + 备份隔离恢复验证（交付收尾）
+
+工具：Bash（git 状态、文件复制、mongod/mongosh 只读检查、curl、taskkill 指定 PID）、Write（run-acceptance.ps1、restore-check.js、证据 package.json）、Edit（证据 README、testing.md、归档脚本的配置读取行——仅 BASE/EDGE 支持环境变量覆盖，断言未动）、python（BOM 处理与文档行追加）、puppeteer-core 驱动真实 Edge（独立验收库）
+
+Prompt（用户本轮指令原文位置：本会话，共三条要求）：一、验收脚本脱离 .tmp-verify 依赖（依赖清单/锁文件、安装与运行目录、浏览器与数据库配置、PowerShell 命令、不硬编码个人临时目录、区分历史证据与重跑结果、重跑写入时间戳目录、不删 .tmp-verify、实际验证可运行、库名保护）；二、EJSON 备份隔离恢复验证（先只读检查备份内容与元数据范围、恢复只进带 restore_check 的新库、拒绝受保护库名与已存在库、验证文档数/类型/引用/代表性内容、索引与集合选项的恢复方式分别说明、sessions 单独说明、失败保留原备份）；三、如实追加 ai-log 并汇报。
+
+实际执行与结果：
+- 验收脚本独立化：`docs/evidence/question-bank/package.json + package-lock.json`（puppeteer-core 锁定 25.14.0，26 个依赖条目，npm 源可重复安装）；两个归档脚本仅将 BASE/EDGE 改为环境变量可覆盖（断言未改）；新增 `run-acceptance.ps1`（库名保护：仅允许 survey_system_accept*；先清空验收库再启动验收服务（索引随启动重建）；只停止自己启动的服务；结果写入 runs/<时间戳>-<脚本名>/；Edge 路径可 -EdgePath 覆盖）；README 重写（PowerShell 用法、历史证据与重跑结果区分、脱敏说明）。.tmp-verify 原目录未删除。
+- 实际验证（按新 README 执行）：库名保护实测拒绝 survey_system / survey_system_test / evil_db；`run-acceptance.ps1 -Script after-fix` → **22 条记录 0 失败**（runs/20261026-162058-after-fix）；`run-acceptance.ps1 -Script before-fix` 两次一致 → 18 PASS / 2 FAIL / 1 SKIP（runs/20261026-162215、162420）：5b 由历史 FAIL 变 PASS（D3 已修复后的新结果）；缺陷D1 为脚本内固定历史记录；**4b FAIL 为 Edge headless 表单合成点击怪癖**——诊断实测 elementFromPoint 指向按钮本身而 page.click 不触发、DOM .click 正常；产品级复核（API caliberChanged 建版本 201 + 浏览器只读渲染「新口径A」）均正常，判定非产品缺陷。以上已如实写入证据 README 与 testing.md。
+- 备份隔离恢复验证：先只读检查备份（manifest 与实际行数一致：users 51/surveys 53/responses 21/sessions 1；严格 EJSON 含 $oid/$date 类型；不含索引/集合选项/库级元数据）。restore-check.js 恢复进新建库 `survey_system_restore_check_20261026` 与 `..._b`（库名必须含 restore_check；拒绝 survey_system 等受保护名；目标库已存在即拒绝——三道保护均实测生效）。验证结果：文档数一致；ObjectId/Date/数字/数组/嵌套类型正确；users/surveys/responses 与正式库**逐文档 EJSON 一致**（126 个业务文档）；答卷→问卷→题目→选项引用完整性逐份通过；最早问卷「E2E 验收问卷 20457651」等代表性内容一致。索引与集合选项由应用启动时 ensureIndexes 重建（非从备份恢复）；sessions 仅验证文档数与 expires 类型（connect-mongo 基础设施，正常会话不依赖本备份恢复）。备份限制：生成于题库启用前，不含启用后新创建的数据；恢复方式记录于脚本注释，未对正式库做任何恢复。
+- 正式库：本轮未写入（只读核对 users 51 / surveys 53 / responses 21 未变；发现启用后用户自行创建的 1 题库/1 题目/1 版本——属启用后业务数据，不在本备份范围内，未做任何修改）；生产服务（3000）与 MongoDB 全程未停止。
+- 未提交 Git、未修改 Word 报告、未运行正式回滚脚本。
+
+---
+
+### 第 19 轮 · 2026-10-26 · 修复原生弹窗被浏览器拦截
+
+工具：Bash（curl 版本检查、mongosh、npm test、taskkill 指定 PID）、Edit（banks.html、style.css）、Write/Edit（回归脚本与证据 README）、python（批量替换原生弹窗调用）、puppeteer-core 驱动真实 Edge（独立验收库 survey_system_accept）
+
+Prompt（用户消息原文位置：本会话）："我现在为什么题库中改名和共享都点不了"。经提问确认为"有按钮但点了没反应"。
+
+排查过程（实际执行）：
+- 检查生产服务（127.0.0.1:3000）实际提供的前端版本：包含第 16 轮修复标记（sharedWithMe / show-archived / rename 按钮），确认用户拿到的是最新代码。
+- 在独立验收环境实测当前代码：自己的题库行有「打开/改名/共享/删除」四按钮，点击改名/共享均能弹出输入框（headless 捕获到 prompt 对话框事件）→ 代码逻辑本身正常。
+- 结论：改名/共享使用浏览器原生 prompt()（删除/归档等使用 confirm/alert），用户浏览器环境拦截原生弹窗导致点击无反应。
+
+修复方式：
+- `public/banks.html`：新增页内对话框组件（`#dialog-overlay`，支持输入框/确认/提示三种模式，Enter 确认、点遮罩取消）；将全部 15 处原生 prompt/confirm/alert 调用替换为 `pagePrompt/pageConfirm/pageAlert`（行为与提示文案不变）。`public/style.css`：新增对话框样式。
+- 回归脚本 `fix-regression.js`（.tmp-verify 与 docs/evidence 两份）：归档确认改为点击页内「确定」；全部点击统一为 clickEl()（等待元素后 DOM click，规避本机 Edge headless 合成点击偶发失效的已知怪癖，断言未改）。
+
+验证结果（实际运行）：
+- 页内对话框浏览器实测（dialog-test.js，独立验收库）：改名弹窗→输入→列表更新 ✅；共享弹窗→输入→"已共享给 dlgB"提示 ✅；删除确认→取消→题库仍在 ✅；归档确认→确定→归档生效→取消归档 ✅。
+- 完整回归 `run-acceptance.ps1 -Script after-fix`：**22 条记录 0 失败**（含 3a 页内确认对话框路径）。
+- `npm test`：**115/115 通过**（后端无改动）。
+- 生产服务无需重启（静态页面即时读取）；用户刷新浏览器即可获得新版页面。
+
+---
+
+### 第 20 轮 · 2026-10-28 · 单题共享（共享粒度扩展，用户反馈需求变更）
+
+工具：Read / Edit / Write / Bash（mongosh、npm test、taskkill 指定 PID、curl）、python（一次性前端补丁脚本）、puppeteer-core 驱动真实 Edge（独立验收库 survey_system_accept）
+
+Prompt（用户消息原文位置：本会话）：用户贴出 8 条"需求变更说明"要求核对实现情况；逐条核对后用户追问"这个是分享题目吧不是题库"，随后明确"那我现在想改一下，把单个题也能分享"。
+
+实现（按用户要求扩展共享粒度，保留题库级共享）：
+- 数据：questions 新增 `sharedWith: [{userId, grantedAt}]`；新索引 `{'sharedWith.userId': 1}`（db.js，与既有索引同属追加型，服务重启时自动创建）。
+- 权限：题库授权与单题授权**任一即可**只读查看/复用（routes/questions.js findQuestionWithAccess 扩展；routes/surveys.js from-bank 同步扩展）；写操作仍仅所有者（403）。
+- API 新增：GET /api/questions/shared（共享给我的题目列表，含 bankName/grantedAt）；POST /api/questions/:id/share {username}（幂等，自享 400）；DELETE /api/questions/:id/share/:userId；GET /api/questions/:id 对 owner 附 sharedWith（含用户名）。
+- 前端：banks.html 新增「共享给我的题目」列表（题库未共享也能打开单题）；题目详情新增「共享」页签（仅所有者：按用户名共享/取消共享列表）；survey.html 的「从题库添加题目」选择器增加「（单题共享）题目名」入口。
+
+验证结果（实际运行）：
+- 自动化：新增 test/question-share.test.js 7 项（幂等/自享/不存在用户/只读 403/无关 404/取消共享后快照统计不变/两种共享独立），`npm test` **122/122 通过**。
+- 真实浏览器（独立验收库）7 项 UI 检查全过：所有者共享页签可见 → 按用户名共享成功 → 共享清单显示用户名 → B 的「共享给我的题目」出现该题（题库未共享）→ B 打开详情只读（无共享页签）→ 选择器出现「（单题共享）你的年龄」→ B 通过该入口把题加入自己的问卷。
+- 正式库：未写入测试数据；服务重启后新索引自动追加。
+- 文档：api.md（3 个新端点）、database.md（字段+索引）、runbook.md（步骤 5 两种共享粒度）、testing.md（新文件与 122/122 记录）、ai-log 本记录。
+
+遗留说明：单题共享与题库共享是独立授权，用户需在题目「共享」页签单独管理单题授权；其余行为（只读、快照隔离、跨问卷统计口径）与题库共享一致。

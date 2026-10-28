@@ -1,0 +1,8 @@
+{
+  "name": "question-bank-evidence",
+  "private": true,
+  "description": "题库功能浏览器验收证据的独立运行依赖（真实 Edge + puppeteer-core）",
+  "dependencies": {
+    "puppeteer-core": "25.14.0"
+  }
+}

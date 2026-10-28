@@ -25,13 +25,28 @@ npm test          # node --test --test-concurrency=1
 | `jumps.test.js` | 单元：单选命中/未命中、any/all（默认 any）、六种运算符、多规则首条命中；API：规则存取与 ObjectId 落库、七类非法配置拒绝、发布校验；集成：合法跳过必答、伪造路径拒绝、旧路径失效、跳过题不入统计、数字+多选组合 |
 | `lifecycle.test.js` | 截止时间设置/修改/清除（DB Date 与 UTC 值验证）、无效格式/过去时间拒绝；截止前后提交；无截止正常；草稿截止过期发布拒绝；主动关闭（closedAt 记录、答卷不受影响、重复关闭幂等、关闭后保持关闭）；未发布访问；权限 404；已移除接口（重开/复制）返回 404 |
 | `question-management.test.js` | 创建时添加多道题目（四题型配置与稳定 ID）；跳转规则仍可配置；发布后加题锁定 409；权限 404；已移除接口（编辑/删除/排序）返回 404 |
+| `banks.test.js`（第 14 轮） | 题库 CRUD 与列表/权限隔离（404 不泄露）；按用户名共享/取消（幂等、共享给自己 400）；T4 只读共享（viewer 写操作 403）；sharedWith 仅所有者可见；非空题库删除 409；新建题目 v1 默认口径；从问卷存入题库（jumps 剥离、选项 id 保留） |
+| `question-versions.test.js`（第 14 轮） | v1 结构/默认口径；基于指定版本建版本（parent 正确、口径继承）；选项 id 跨版本稳定；恢复 = 新建记录且历史版本不被覆盖（无更新路由 404）；5 并发版本号互异（$inc+唯一索引）；clientToken 幂等（V2：同 token 仅一个版本文档）；版本号空缺容忍；latestVersionNo 自愈（V1）；校验与权限（T4）；删除被使用 409（T5）与未使用级联删除 |
+| `question-reuse.test.js`（第 14 轮） | 从题库添加 = 完整快照 + 来源字段 + jumps 清空（T3）+ 选项 id 原样；A 卷 v1 / B 卷 v2、创建 v3 两卷快照逐字段不变；A1 隔离（归档+撤共享后快照不变、填写统计照旧）；仅草稿可加（Q5）；共享用户可复用、无关用户 404；同题多次加入；被使用题目删除 409 |
+| `question-usages.test.js`（第 14 轮） | 派生查询：版本/状态/加入时间正确；本人问卷标题可见（canViewStats），他人问卷标题隐藏（T2）；共享用户可查；无关用户 404；问卷关闭状态自动反映；无使用返回空 |
+| `cross-stats.test.js`（第 14 轮） | 合并规则钉死：title/选项 id/required 变化不拆组，label/顺序/约束/口径声明变化强制拆组（S4）；数字加权均值 16/3 ≠ 6.5（S2）；多选按 label 对齐；文本带来源；单版本查询；T1 隐私（不含他人问卷、共享用户只看自己、无关 404）；匿名问卷无身份字段 |
+| `question-share.test.js`（第 20 轮） | 单题共享：按用户名共享/幂等/自享 400/用户不存在 404；被共享者共享列表可见、题目可读、题库不可见、可复用进问卷；写操作全部 403；无关用户 404；取消共享后访问消失且已加入问卷的快照与统计不受影响；题库共享与单题共享独立生效 |
+| `migration.test.js`（第 14 轮） | 旧结构问卷（无来源字段）填写/提交/统计与升级前一致；回滚路径：删除三个新集合后现有功能与快照问卷不受影响（快照自包含）；回滚后题库接口安全降级 |
 
-## 最终验收运行记录（2026-10-17，实际输出）
+## 最终验收运行记录
 
 | 运行 | 命令 | 实际结果 |
 | --- | --- | --- |
-| 正向全量 | `npm test` | **80/80 通过**（约 8.8 秒） |
-| 反向文件顺序 | `node --test --test-concurrency=1 test/surveys.test.js test/stats.test.js test/question-types.test.js test/question-management.test.js test/lifecycle.test.js test/jumps.test.js test/fill.test.js test/auth.test.js` | **78/78 通过**（helpers.js 非测试文件，显式列文件时不计） |
+| 正向全量（2026-10-17） | `npm test` | **80/80 通过**（约 8.8 秒） |
+| 反向文件顺序（2026-10-17） | `node --test --test-concurrency=1 test/surveys.test.js test/stats.test.js test/question-types.test.js test/question-management.test.js test/lifecycle.test.js test/jumps.test.js test/fill.test.js test/auth.test.js` | **78/78 通过**（helpers.js 非测试文件，显式列文件时不计） |
+| 正向全量（2026-10-26，第 14 轮后） | `npm test` | **115/115 通过**（旧 71 + 新 44；过程见 ai-log 第 14 轮：两次服务端 bug 与三次测试代码问题均已修复） |
+| 正向全量（2026-10-26，最终验收） | `npm test` | **115/115 通过**（16.5 秒，验收轮复跑） |
+| 真实浏览器验收（2026-10-26，最终验收） | `node .tmp-verify/acceptance.js`（puppeteer-core 驱动本机 Edge，独立库 survey_system_accept） | runbook §4 第 1–8 步 **18 项通过、2 个界面缺陷（D1/D3）、1 项 SKIP（第 9 步回滚脚本按指示未运行）**；截图与结果 JSON 在 `.tmp-verify/acceptance/`（`acceptance-results.json`） |
+| D3/D1/D2 修复回归（2026-10-26，第 16 轮） | `node .tmp-verify/acceptance-fix/fix-regression.js`（真实 Edge + 独立验收库） | **21 项通过**：B 界面打开共享题库与只读边界（界面写入口隐藏 + 6 类写接口 403）、从题库选题 v2→发布→填写→提交→本人统计、B 界面跨问卷统计（不含 A 的问卷）、归档→离开→刷新→显示已归档→取消归档→列表/选题入口恢复、快照/版本/答卷不变、控制台无 scrollIntoView/undefined.name 异常；截图与结果 JSON 在 `.tmp-verify/acceptance-fix/` |
+| 正向全量（2026-10-26，第 16 轮修复后） | `npm test` | **115/115 通过**（17.2 秒，与修复前一致） |
+| 正向全量（2026-10-28，第 20 轮单题共享后） | `npm test` | **122/122 通过**（新增 7 项单题共享测试） |
+| 独立重跑（2026-10-26，第 18 轮，docs/evidence/question-bank/run-acceptance.ps1，独立验收库） | `run-acceptance.ps1 -Script after-fix` | **22 条记录 0 失败**（修复后回归完整通过） |
+| 独立重跑（2026-10-26，第 18 轮） | `run-acceptance.ps1 -Script before-fix` | 18 PASS / 2 FAIL / 1 SKIP：5b 由历史 FAIL 变 PASS（D3 已修复）；缺陷D1 为脚本内固定历史记录行；4b FAIL 为 Edge headless 表单合成点击怪癖（产品级复核：API 口径创建 + 版本历史渲染均正常，非产品缺陷）。详见 docs/evidence/question-bank/README.md |
 
 ## 测试证据位置
 

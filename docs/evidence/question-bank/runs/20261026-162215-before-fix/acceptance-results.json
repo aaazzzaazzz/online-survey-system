@@ -1,0 +1,123 @@
+{
+  "results": [
+    {
+      "step": 1,
+      "ok": true,
+      "detail": "账号 A 注册登录 → 我的问卷 → 题库管理 → banks.html 正常打开"
+    },
+    {
+      "step": 2,
+      "ok": true,
+      "detail": "新建题库「验收题库」出现在我的题库列表"
+    },
+    {
+      "step": 3,
+      "ok": true,
+      "detail": "单选题 v1 创建成功（3 个选项、必答、版本说明「初版」），出现在题库题目列表"
+    },
+    {
+      "step": "4a",
+      "ok": true,
+      "detail": "基于 v1 创建 v2（增选项），版本历史链路正确（v2 的 parent=v1）"
+    },
+    {
+      "step": "4b",
+      "ok": false,
+      "detail": "声明口径改变创建 v3，版本历史显示新口径「新口径A」"
+    },
+    {
+      "step": "4c",
+      "ok": true,
+      "detail": "恢复 v1 生成 v4 新记录（parent=v1、说明「恢复自 v1」），历史版本未被覆盖"
+    },
+    {
+      "step": "5a",
+      "ok": true,
+      "detail": "B 的「共享给我的题库」可见 A 的题库"
+    },
+    {
+      "step": "5b",
+      "ok": true,
+      "detail": "B 界面标记只读（标题实际=\"验收题库（共享 · 只读）\"）；改名/建题/建版本/删除全部 403（实际 403,403,403,403）"
+    },
+    {
+      "step": "6a",
+      "ok": true,
+      "detail": "问卷已加入题库题目快照（2 版，含黄色选项，标注来源）"
+    },
+    {
+      "step": "6b",
+      "ok": true,
+      "detail": "题库创建 v5（黑/白）并撤销共享后，问卷快照内容与来源版本完全不变"
+    },
+    {
+      "step": "7a",
+      "ok": true,
+      "detail": "B 通过分享链接填写并提交成功"
+    },
+    {
+      "step": "7b",
+      "ok": true,
+      "detail": "问卷统计显示蓝色选择人数 1（真实答卷聚合）；片段=\"蓝色1绿色0黄色0该题回答人数：1（被跳过的题不计入）\\n  \\n\\n  \\n  \\n    const id = new URLSe\""
+    },
+    {
+      "step": "7c",
+      "ok": true,
+      "detail": "使用关系显示本人问卷（标题可见）与所用版本"
+    },
+    {
+      "step": "7d",
+      "ok": true,
+      "detail": "跨问卷统计按快照口径正确聚合（本人问卷，蓝色 1）"
+    },
+    {
+      "step": "7e",
+      "ok": true,
+      "detail": "B（共享只读）的跨问卷统计不包含 A 的问卷（T1 隐私边界；实际 status=200, groups=0）；UI 打开共享题库受缺陷 D3 阻断，未能走界面路径"
+    },
+    {
+      "step": "8a",
+      "ok": true,
+      "detail": "归档后题目从题库列表与「从题库添加」选择器消失"
+    },
+    {
+      "step": "8b",
+      "ok": true,
+      "detail": "未使用题目删除成功（提示「已删除」，版本级联删除）"
+    },
+    {
+      "step": "缺陷D1",
+      "ok": false,
+      "detail": "归档题目离开详情页后界面无法取消归档（列表隐藏归档题且无筛选/入口，API POST /unarchive 可用但 UI 无入口）。建议：题目列表增加「显示已归档」开关，或将归档题以置灰行显示并保留「取消归档」按钮。"
+    },
+    {
+      "step": "8c",
+      "ok": true,
+      "detail": "被问卷使用的题目删除被拒（提示「不能删除」409，T5）"
+    },
+    {
+      "step": "8d",
+      "ok": true,
+      "detail": "非空题库删除被拒（409）"
+    },
+    {
+      "step": 9,
+      "ok": null,
+      "detail": "第 9 步（回滚脚本）按用户指示不运行；等价场景（删除三个新集合后现有功能与快照问卷不受影响）已由 migration.test.js 自动化覆盖"
+    }
+  ],
+  "consoleErrors": [
+    "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 403 (Forbidden)",
+    "Failed to load resource: the server responded with a status of 403 (Forbidden)",
+    "Failed to load resource: the server responded with a status of 403 (Forbidden)",
+    "Failed to load resource: the server responded with a status of 403 (Forbidden)",
+    "ReferenceError: dialogs is not defined",
+    "Failed to load resource: the server responded with a status of 409 (Conflict)",
+    "Failed to load resource: the server responded with a status of 409 (Conflict)"
+  ],
+  "at": "2026-10-26T08:22:28.046Z"
+}

@@ -16,10 +16,24 @@
   <div class="card" id="action-bar">
     <div class="btn-group">
       <button id="action-add" class="secondary" hidden>＋ 添加题目</button>
+      <button id="action-from-bank" class="secondary" hidden>＋ 从题库添加题目</button>
       <button id="action-publish" hidden>发布问卷</button>
       <button id="action-close" class="secondary" hidden>关闭问卷</button>
     </div>
   </div>
+
+  <section class="card" id="from-bank-panel" hidden>
+    <h2>从题库添加题目</h2>
+    <p class="hint">选择自己或他人共享的题库中的题目：加入时会把所选版本的完整内容复制进问卷（固定该版本，之后题库更新不影响本题）；跳转规则需在加入后重新配置。</p>
+    <label>题库<select id="fb-bank" required></select></label>
+    <label>题目<select id="fb-question" required></select></label>
+    <label>版本<select id="fb-version" required></select></label>
+    <div class="btn-group">
+      <button id="fb-add">加入问卷</button>
+      <button id="fb-cancel" class="secondary">取消</button>
+    </div>
+    <p id="fb-message"></p>
+  </section>
 
   <section class="card">
     <h2>基本信息</h2>
@@ -222,6 +236,7 @@
       document.getElementById('publish-btn').hidden = published || closed;
       document.getElementById('close-btn').hidden = !published;
       document.getElementById('action-add').hidden = published || closed;
+      document.getElementById('action-from-bank').hidden = published || closed;
       document.getElementById('action-publish').hidden = published || closed;
       document.getElementById('action-close').hidden = !published;
       const fillUrl = location.origin + '/survey/' + survey.id;
@@ -244,6 +259,7 @@
           <div class="q-title"><strong>${i + 1}. ${escapeHtml(q.title)}</strong>
             <span class="badge badge-type">${TYPE_TEXT[q.type] || q.type}</span>
             ${q.required ? '<span class="badge badge-required">必答</span>' : ''}
+            ${q.sourceQuestionId ? `<a class="hint" href="/banks.html">来自题库 v${q.sourceVersionNo}（快照，不受题库更新影响）</a>` : ''}
           </div>
         </div>` +
         (summary ? `<p class="q-summary">${escapeHtml(summary)}</p>` : '') +
@@ -499,6 +515,76 @@
     document.getElementById('copy-btn').addEventListener('click', async () => {
       await navigator.clipboard.writeText(location.origin + '/survey/' + survey.id);
       document.getElementById('copy-btn').textContent = '已复制';
+    });
+
+    // —— 从题库添加题目（快照固定版本；跳转加入后重新配置）——
+    let bankCache = [];
+    let sharedQuestionCache = []; // 单题共享（第 20 轮）：共享给我的题目也可直接选用
+    document.getElementById('action-from-bank').addEventListener('click', async () => {
+      document.getElementById('fb-message').textContent = '';
+      const r = await api('/api/banks');
+      bankCache = [...(r.data.mine || []), ...(r.data.sharedWithMe || [])];
+      const qs = await api('/api/questions/shared');
+      sharedQuestionCache = (qs.data || []).filter((q) => q.status === 'active');
+      const bankSel = document.getElementById('fb-bank');
+      bankSel.innerHTML = bankCache.map((b) => `<option value="bank:${b.id}">${escapeHtml(b.name)}${b.role === 'viewer' ? '（共享）' : ''}</option>`).join('')
+        + sharedQuestionCache.map((q) => `<option value="q:${q.id}">（单题共享）${escapeHtml(q.title)}</option>`).join('');
+      document.getElementById('fb-question').innerHTML = '<option value="">（请选择题库）</option>';
+      document.getElementById('fb-version').innerHTML = '<option value="">（请选择题目）</option>';
+      document.getElementById('from-bank-panel').hidden = false;
+      document.getElementById('from-bank-panel').scrollIntoView({ behavior: 'smooth' });
+      if (bankSel.options.length) bankSel.dispatchEvent(new Event('change'));
+    });
+
+    document.getElementById('fb-bank').addEventListener('change', async (e) => {
+      const value = e.target.value;
+      const qSel = document.getElementById('fb-question');
+      const vSel = document.getElementById('fb-version');
+      vSel.innerHTML = '<option value="">（请选择题目）</option>';
+      if (!value) { qSel.innerHTML = '<option value="">（请选择题库）</option>'; return; }
+      if (value.startsWith('q:')) {
+        // 单题共享入口：直接列出该题（第 20 轮）
+        const q = sharedQuestionCache.find((x) => x.id === value.slice(2));
+        qSel.innerHTML = q
+          ? `<option value="${q.id}" data-latest="${q.latestVersionNo}">${escapeHtml(q.title)}（v${q.latestVersionNo}）</option>`
+          : '<option value="">（题目不可用）</option>';
+      } else {
+        const bankId = value.slice('bank:'.length);
+        const r = await api('/api/banks/' + bankId + '/questions');
+        qSel.innerHTML = (r.data || []).filter((q) => q.status === 'active')
+          .map((q) => `<option value="${q.id}" data-latest="${q.latestVersionNo}">${escapeHtml(q.title)}（v${q.latestVersionNo}）</option>`).join('') || '<option value="">（题库为空）</option>';
+      }
+      if (qSel.options.length) qSel.dispatchEvent(new Event('change'));
+    });
+
+    document.getElementById('fb-question').addEventListener('change', async (e) => {
+      const qId = e.target.value;
+      const vSel = document.getElementById('fb-version');
+      if (!qId) { vSel.innerHTML = '<option value="">（请选择题目）</option>'; return; }
+      const latest = Number(e.target.selectedOptions[0].dataset.latest);
+      const r = await api('/api/questions/' + qId + '/versions');
+      const list = r.data || [];
+      vSel.innerHTML = list.map((v) => `<option value="${v.versionNo}"${v.versionNo === latest ? ' selected' : ''}>v${v.versionNo}${v.parentVersionNo === null ? '（初版）' : ''}${escapeHtml(v.changeNote ? ' · ' + v.changeNote : '')}</option>`).join('');
+    });
+
+    document.getElementById('fb-add').addEventListener('click', async () => {
+      const qId = document.getElementById('fb-question').value;
+      const versionNo = document.getElementById('fb-version').value;
+      const msg = document.getElementById('fb-message');
+      if (!qId || !versionNo) { msg.textContent = '请选择题目与版本'; return; }
+      const r = await api(`/api/surveys/${id}/questions/from-bank`, {
+        method: 'POST',
+        body: { bankQuestionId: qId, versionNo: Number(versionNo) },
+      });
+      if (r.status === 201) {
+        msg.textContent = '已加入问卷（跳转规则已清空，请在题目下方重新配置）';
+        document.getElementById('from-bank-panel').hidden = true;
+        load();
+      } else msg.textContent = (r.data && r.data.error) || '加入失败';
+    });
+
+    document.getElementById('fb-cancel').addEventListener('click', () => {
+      document.getElementById('from-bank-panel').hidden = true;
     });
 
     syncTypeFields();
